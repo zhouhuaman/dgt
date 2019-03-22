@@ -40,6 +40,10 @@
 #include "../operator/tensor/init_op.h"
 
 #include "kvstore_dist.h"
+
+#ifndef FINE_GRAIN_MSG
+#define FINE_GRAIN_MSG
+#endif
 namespace mxnet {
 namespace kvstore {
 
@@ -712,6 +716,7 @@ class KVStoreDistServer {
 		// could be deallocated when this function returns. so we need to make sure
 		// the operators with \a NDArray are actually finished
 		if (req_meta.push) {
+		  std::cout << "req_data_keys:" << req_data.keys << "req_data_lens:" << req_data.lens;
 		  CHECK_EQ(req_data.keys.size(),req_data.lens.size());
 		  size_t val_begin = 0, val_end = 0;
 		  for(size_t i = 0; i < req_data.keys.size(); i++){

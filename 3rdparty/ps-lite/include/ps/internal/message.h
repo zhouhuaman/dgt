@@ -11,6 +11,7 @@
 
 
 #define LITTLE_GRAIN_MSG
+#define UDP_CHANNEL
 namespace ps {
 /** \brief data type */
 enum DataType {
@@ -110,7 +111,7 @@ struct Control {
   std::string DebugString() const {
     if (empty()) return "";
     std::vector<std::string> cmds = {
-      "EMPTY", "TERMINATE", "ADD_NODE", "BARRIER", "ACK", "HEARTBEAT"};
+      "EMPTY", "TERMINATE", "ADD_NODE", "BARRIER", "ACK", "HEARTBEAT", "DATA"};
     std::stringstream ss;
     ss << "cmd=" << cmds[cmd];
     if (node.size()) {
@@ -123,7 +124,7 @@ struct Control {
     return ss.str();
   }
   /** \brief all commands */
-  enum Command { EMPTY, TERMINATE, ADD_NODE, BARRIER, ACK, HEARTBEAT };
+  enum Command { EMPTY, TERMINATE, ADD_NODE, BARRIER, ACK, HEARTBEAT, DATA };
   /** \brief the command */
   Command cmd;
   /** \brief node infos */
@@ -133,6 +134,9 @@ struct Control {
   /** message signature */
   uint64_t msg_sig;
 };
+#ifdef UDP_CHANNEL
+typedef int Meta_head;
+#endif
 /**
  * \brief meta info of a message
  */
@@ -140,9 +144,15 @@ struct Meta {
   /** \brief the empty value */
   static const int kEmpty;
   /** \brief default constructor */
+#ifdef UDP_CHANNEL
   Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
-           timestamp(kEmpty), sender(kEmpty), recver(kEmpty),
+           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),sender(kEmpty), recver(kEmpty),
            request(false), push(false), simple_app(false) {}
+#else
+	 Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
+           timestamp(kEmpty), sender(kEmpty), recver(kEmpty),
+           request(false), push(false), simple_app(false){}
+#endif
   std::string DebugString() const {
     std::stringstream ss;
     if (sender == Node::kEmpty) {
@@ -153,7 +163,16 @@ struct Meta {
     ss <<  " => " << recver;
     ss << ". Meta: request=" << request;
     if (timestamp != kEmpty) ss << ", timestamp=" << timestamp;
+#ifdef LITTLE_GRAIN_MSG
 	ss << ", tracker_num = " << tracker_num;
+#endif
+#ifdef UDP_CHANNEL
+    ss << ", first_key = " << first_key;
+	ss << ", keys_len = " << keys_len;
+	ss << ", vals_len = " << vals_len;
+	ss << ", lens_len = " << lens_len;
+	
+#endif
     if (!control.empty()) {
       ss << ", control={ " << control.DebugString() << " }";
     } else {
@@ -182,6 +201,13 @@ struct Meta {
 #ifdef LITTLE_GRAIN_MSG
   /** \brief bring the tracker_num of timestamp*/
   int tracker_num;
+#endif
+#ifdef UDP_CHANNEL
+  int first_key;   //used for calculate resender_key
+  int keys_len;
+  int vals_len;
+  int lens_len;
+  //std::vector<int> data_len;
 #endif
   /** \brief the node id of the sender of this message */
   int sender;

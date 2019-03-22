@@ -53,7 +53,7 @@ class Van {
      * \brief send a message, It is thread-safe
      * \return the number of bytes sent. -1 if failed
      */
-    int Send(const Message &msg);
+    int Send(Message &msg);
 
     /**
      * \brief return my node
@@ -103,7 +103,7 @@ class Van {
      * \brief send a mesage
      * \return the number of bytes sent
      */
-    virtual int SendMsg(const Message &msg) = 0;
+    virtual int SendMsg(Message &msg) = 0;
 
     /**
      * \brief pack meta into a string

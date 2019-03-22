@@ -216,6 +216,12 @@ void Van::ProcessDataMsg(Message* msg) {
   auto* obj = Postoffice::Get()->GetCustomer(app_id, customer_id, 5);
   CHECK(obj) << "timeout (5 sec) to wait App " << app_id << " customer " << customer_id \
     << " ready at " << my_node_.role;
+  	 if(msg->data.size() > 0){
+		  if(msg->data[0][0] > 100000){
+				std::cout << "Van->ProcessDataMsg#221:find error key" << msg->data[0] << msg->meta.DebugString() << std::endl;
+		   }
+		  
+	  }
   obj->Accept(*msg);
 }
 
@@ -327,14 +333,20 @@ void Van::Start(int customer_id) {
   start_mu_.lock();
   if (init_stage == 1) {
     // resender
+#ifdef UDP_CHANNEL
+      int timeout = 1000;
+	  std::cout << my_node_.role << ":" << "start resender_" << std::endl;
+      resender_ = new Resender(timeout, 10, this);
+#else
     if (Environment::Get()->find("PS_RESEND") && atoi(Environment::Get()->find("PS_RESEND")) != 0) {
       int timeout = 1000;
       if (Environment::Get()->find("PS_RESEND_TIMEOUT")) {
         timeout = atoi(Environment::Get()->find("PS_RESEND_TIMEOUT"));
       }
+	  std::cout << my_node_.role << ":" << "start resender_" << std::endl;
       resender_ = new Resender(timeout, 10, this);
     }
-
+#endif
     if (!is_scheduler_) {
       // start heartbeat thread
       heartbeat_thread_ = std::unique_ptr<std::thread>(
@@ -367,11 +379,18 @@ void Van::Stop() {
   barrier_count_.clear();
 }
 
-int Van::Send(const Message& msg) {
+int Van::Send( Message& msg) {
+  static unsigned int count = 0;
+  count++;
+  //std::cout << "Van::Send:count = " << count << std::endl;
   int send_bytes = SendMsg(msg);
+  //std::cout << "Van::Send, send " << send_bytes << "bytes" << std::endl;
   CHECK_NE(send_bytes, -1);
   send_bytes_ += send_bytes;
-  if (resender_) resender_->AddOutgoing(msg);
+  if (resender_) {
+	  //std::cout << "Van::Send, record outgoing msg" << std::endl;
+	  resender_->AddOutgoing(msg);
+  }
   if (Postoffice::Get()->verbose() >= 2) {
     PS_VLOG(2) << msg.DebugString();
   }
@@ -401,9 +420,15 @@ void Van::Receiving() {
     if (Postoffice::Get()->verbose() >= 2) {
       PS_VLOG(2) << msg.DebugString();
     }
+	 if(msg.data.size() > 0){
+		  if(msg.data[0][0] > 100000){
+				std::cout << "Van->Receiving#419:find error key" << msg.data[0] << msg.meta.DebugString() << std::endl;
+		   }
+		  
+	  }
     // duplicated message
     if (resender_ && resender_->AddIncomming(msg)) continue;
-
+/* #ifdef UDP_CHANNEL
     if (!msg.meta.control.empty()) {
       // control msg
       auto& ctrl = msg.meta.control;
@@ -416,7 +441,31 @@ void Van::Receiving() {
         ProcessBarrierCommand(&msg);
       } else if (ctrl.cmd == Control::HEARTBEAT) {
         ProcessHearbeat(&msg);
-      } else {
+      }else if(ctrl.cmd == Control::DATA){
+		ProcessDataMsg(&msg);
+	  }else {
+        LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
+      }
+    } else {
+	  /* static int count = 0;
+	  count++;
+	  printf("Recve a DataMsg = %d\n",count); 
+      ProcessDataMsg(&msg);
+    }
+#else */
+	if (!msg.meta.control.empty()) {
+      // control msg
+      auto& ctrl = msg.meta.control;
+      if (ctrl.cmd == Control::TERMINATE) {
+        ProcessTerminateCommand();
+        break;
+      } else if (ctrl.cmd == Control::ADD_NODE) {
+        ProcessAddNodeCommand(&msg, &nodes, &recovery_nodes);
+      } else if (ctrl.cmd == Control::BARRIER) {
+        ProcessBarrierCommand(&msg);
+      } else if (ctrl.cmd == Control::HEARTBEAT) {
+        ProcessHearbeat(&msg);
+	  }else {
         LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
       }
     } else {
@@ -425,6 +474,7 @@ void Van::Receiving() {
 	  printf("Recve a DataMsg = %d\n",count); */
       ProcessDataMsg(&msg);
     }
+//#endif
   }
 }
 
@@ -437,6 +487,15 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   if (meta.body.size()) pb.set_body(meta.body);
   /*tracker_num used for little msg*/
   pb.set_tracker_num(meta.tracker_num);
+#ifdef UDP_CHANNEL
+  pb.set_keys_len(meta.keys_len);
+  pb.set_vals_len(meta.vals_len);
+  pb.set_lens_len(meta.lens_len);
+  
+  pb.set_sender(my_node_.id);
+  pb.set_recver(meta.recver);
+  pb.set_first_key(meta.first_key);
+#endif
   pb.set_push(meta.push);
   pb.set_request(meta.request);
   pb.set_simple_app(meta.simple_app);
@@ -480,7 +539,14 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
   meta->timestamp = pb.has_timestamp() ? pb.timestamp() : Meta::kEmpty;
   /*tracker_num used for little grain message*/
   meta->tracker_num = pb.tracker_num();
-  
+#ifdef UDP_CHANNEL
+  meta->keys_len = pb.keys_len();
+  meta->vals_len = pb.vals_len();
+  meta->lens_len = pb.lens_len();
+  meta->sender = pb.sender();
+  meta->recver = pb.recver();
+  meta->first_key = pb.first_key();
+#endif
   meta->request = pb.request();
   meta->push = pb.push();
   meta->simple_app = pb.simple_app();
@@ -509,6 +575,7 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
   } else {
     meta->control.cmd = Control::EMPTY;
   }
+ // std::cout << "van.cc:528" << std::endl;
 }
 
 void Van::Heartbeat() {

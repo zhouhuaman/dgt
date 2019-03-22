@@ -9,8 +9,11 @@
 #include "ps/base.h"
 #include "ps/simple_app.h"
 #include <unistd.h>
+#include "ps/internal/message.h"
 
+#ifndef LITTLE_GRAIN_MSG
 #define LITTLE_GRAIN_MSG
+#endif
 namespace ps {
 
 /**
@@ -289,6 +292,9 @@ struct KVMeta {
 #ifdef LITTLE_GRAIN_MSG
   int tracker_num;
 #endif
+#ifdef UDP_CHANNEL
+  int first_key;
+#endif
   /** \brief the customer id of worker */
   int customer_id;
 };
@@ -383,6 +389,9 @@ void KVServer<Val>::Process(const Message& msg) {
 #ifdef LITTLE_GRAIN_MSG
   meta.tracker_num = msg.meta.tracker_num;
 #endif
+#ifdef UDP_CHANNEL
+  meta.first_key = msg.meta.first_key;
+#endif
   meta.customer_id = msg.meta.customer_id;
   //printf("#Process 387:timestamp = %d,meta.tracker_num = %d\n",meta.timestamp,meta.tracker_num);
   KVPairs<Val> data;
@@ -416,16 +425,34 @@ void KVServer<Val>::Response(const KVMeta& req, const KVPairs<Val>& res) {
 #ifdef LITTLE_GRAIN_MSG
   msg.meta.tracker_num = req.tracker_num;
 #endif
+#ifdef UDP_CHANNEL
+  msg.meta.first_key = req.first_key;
+#endif
   msg.meta.recver      = req.sender;
   if (res.keys.size()) {
     msg.AddData(res.keys);
+#ifdef UDP_CHANNEL
+	msg.meta.keys_len = msg.data.back().size();
+#endif
 	//std::cout << "kv_app.h#402: " << res.keys << std::endl;
     msg.AddData(res.vals);
+#ifdef UDP_CHANNEL
+	msg.meta.vals_len = msg.data.back().size();
+#endif
     if (res.lens.size()) {
 	  //std::cout << "kv_app.h#405: " << res.lens << std::endl;
       msg.AddData(res.lens);
+#ifdef UDP_CHANNEL
+	  msg.meta.lens_len = msg.data.back().size();
+#endif
     }
   }
+  /* int n = msg.data.size();
+  msg.meta.data_num = n;
+  msg.meta.data_len.clear();
+	for(int i = 0; i < n; ++i){
+		msg.meta.data_len.push_back(msg.data[i].size());
+	} */
   Postoffice::Get()->van()->Send(msg);
 }
 
@@ -546,11 +573,14 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 		msg.meta.request     = true;
 		msg.meta.push        = push;
 		msg.meta.head        = cmd;
+		//msg.meta.control.cmd = Control::DATA;
 		msg.meta.timestamp   = timestamp;
 		msg.meta.tracker_num = kvs.keys.size();
 		msg.meta.recver      = Postoffice::Get()->ServerRankToID(i);
+		//msg.meta.sender      = Postoffice::Get()->van()->my_node().id;
 		KVPairs<char> tmp_kv;
 		tmp_kv.keys = tmp_kvs.keys.segment(j,j+1);
+		msg.meta.first_key = tmp_kv.keys[0];
 		if (tmp_kvs.lens.size()) {
 			tmp_kv.lens = tmp_kvs.lens.segment(j,j+1);
 			val_end += tmp_kvs.lens[j];
@@ -559,16 +589,29 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 		}else{
 			tmp_kv.vals = tmp_kvs.vals.segment(j*k, (j+1)*k);
 		}
-		
+/* #ifdef UDP_CHANNEL
+		msg.meta.data_num = 0;
+#endif */
 		if (tmp_kv.keys.size()) {
+
 		  msg.AddData(tmp_kv.keys);
+#ifdef UDP_CHANNEL
+		  msg.meta.keys_len = msg.data.back().size();
+#endif
+
 		  if(msg.meta.push == true){
 			/*   std::cout << "recver" << msg.meta.recver << std::endl;
 			  std::cout << tmp_kv.keys << std::endl; */
 		  }
 		  msg.AddData(tmp_kv.vals);
+#ifdef UDP_CHANNEL
+		 msg.meta.vals_len = msg.data.back().size();
+#endif
 		  if (tmp_kv.lens.size()) {
 			msg.AddData(tmp_kv.lens);
+#ifdef UDP_CHANNEL
+			msg.meta.lens_len = msg.data.back().size();
+#endif
 			if(msg.meta.push == true){
 				/* std::cout << tmp_kv.lens << std::endl; */
 			}
@@ -580,6 +623,20 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 		//printf("################################\n");
 		//std::cout << "msg.meta.timestamp = " <<msg.meta.timestamp << " tracker_num = " << msg.meta.tracker_num << std::endl;
 		//usleep(100000);
+/* #ifdef UDP_CHANNEL
+		int n = msg.data.size();
+		msg.meta.data_num = n;
+		for(int i = 0; i < n; ++i){
+			msg.meta.data_len.push_back(msg.data[i].size());
+		}
+		std::cout << "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$" << std::endl;
+		  std::cout << "msg->meta.data_num = " << msg.meta.data_num << std::endl;
+		    for(int i = 0; i < msg.meta.data_num; ++i){
+				std::cout << "msg->meta.data_len[i]"  << msg.meta.data_len[i] << std::endl;
+			}
+#endif */
+		
+		usleep(100);
 		Postoffice::Get()->van()->Send(msg);
 	}
 #else
@@ -627,7 +684,23 @@ void KVWorker<Val>::Process(const Message& msg) {
   if (!msg.meta.push && msg.data.size()) {
     CHECK_GE(msg.data.size(), (size_t)2);
     KVPairs<Val> kvs;
+	if(msg.data.size() > 0){
+		  if(((SArray<Key>)msg.data[0])[0] > 100000){
+				std::cout << "KVWorker->Process#678:find error key" << (SArray<Key>)msg.data[0] << msg.meta.DebugString() << std::endl;
+		   }
+		   KVPairs<Val> test_kvs;
+		   test_kvs.keys = msg.data[0];
+		   if(test_kvs.keys[0] > 100000){
+		   
+		   std::cout << "KVWorker->Process#683:test_kvs:" << test_kvs.keys << msg.meta.DebugString() << std::endl;
+		   std::cout << "KVWorker->Process#683:msg.data[0][0] = " << (SArray<Key>)msg.data[0] << std::endl;
+	}
+		  
+	  }
     kvs.keys = msg.data[0];
+	if(kvs.keys[0] > 100000){
+		std::cout << "find error key" << kvs.keys << msg.meta.DebugString() << std::endl;
+	}
     kvs.vals = msg.data[1];
     if (msg.data.size() > (size_t)2) {
       kvs.lens = msg.data[2];
@@ -685,7 +758,7 @@ int KVWorker<Val>::Pull_(
       for (const auto& s : kvs) {
         Range range = FindRange(keys, s.keys.front(), s.keys.back()+1);
         CHECK_EQ(range.size(), s.keys.size())
-            << "unmatched keys size from one server";
+            << "unmatched keys size from one server" << keys <<"("<<range.begin() << "," << range.end() << ")"<<s.keys;
 
         if (lens) CHECK_EQ(s.lens.size(), s.keys.size());
 

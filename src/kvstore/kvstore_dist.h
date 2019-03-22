@@ -35,7 +35,7 @@
 
 #define FINE_GRAIN_MSG
 #ifdef FINE_GRAIN_MSG
-#define MAX_MSG_LIMIT 8*1024
+#define MAX_MSG_LIMIT 4*1024
 #endif
 namespace mxnet {
 namespace kvstore {

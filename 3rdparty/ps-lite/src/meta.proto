@@ -54,4 +54,13 @@ message PBMeta {
   optional bool simple_app = 6 [default = false];
    //tracker_num used for little grain msg
   optional int32 tracker_num = 11;
+   //record msg's sender
+   optional int32 sender = 12;
+   //record msg's recver
+   optional int32 recver = 13;
+   //record the data's msg's first_key, used for calculate resender_key
+   optional int32 first_key = 14;
+   optional int32 keys_len = 15;
+   optional int32 vals_len = 16;
+   optional int32 lens_len = 17;
 }
