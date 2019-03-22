@@ -53,8 +53,12 @@ class Van {
      * \brief send a message, It is thread-safe
      * \return the number of bytes sent. -1 if failed
      */
+#ifdef DOUBLE_CHANNEL
+    /*channel = 0 means tcp channel 1->udp channel tag = 0 means send imediately.*/
+	int Send(Message &msg, int channel = 0, int tag = 0);
+#else
     int Send(Message &msg);
-
+#endif
     /**
      * \brief return my node
      */
@@ -84,7 +88,9 @@ class Van {
      * \brief connect to a node
      */
     virtual void Connect(const Node &node) = 0;
-
+#ifdef DOUBLE_CHANNEL
+	virtual void Connect_UDP(const Node &node) = 0;
+#endif
     /**
      * \brief bind to my node
      * do multiple retries on binding the port. since it's possible that
@@ -92,19 +98,31 @@ class Van {
      * \return return the port binded, -1 if failed.
      */
     virtual int Bind(const Node &node, int max_retry) = 0;
+#ifdef DOUBLE_CHANNEL
+	 virtual int Bind_UDP(const Node &node, int max_retry) = 0;
+#endif
 
+#ifdef DOUBLE_CHANNEL
+	virtual int RecvMsg_TCP(Message *msg) = 0;
+	virtual int RecvMsg_UDP(Message *msg) = 0;
+#else
     /**
      * \brief block until received a message
      * \return the number of bytes received. -1 if failed or timeout
      */
     virtual int RecvMsg(Message *msg) = 0;
-
-    /**
+#endif
+  
+#ifdef DOUBLE_CHANNEL
+    virtual int SendMsg_UDP(Message &msg, int tag = 0) = 0;
+	virtual int SendMsg_TCP(Message &msg, int tag = 0) = 0;
+#else
+	 /**
      * \brief send a mesage
      * \return the number of bytes sent
      */
     virtual int SendMsg(Message &msg) = 0;
-
+#endif
     /**
      * \brief pack meta into a string
      */
@@ -122,7 +140,13 @@ class Van {
 
  private:
     /** thread function for receving */
+	/*if DOUBLE_CHANNEL, Receiving=> Receiving_TCP and  Receiving_UDP*/
+#ifdef DOUBLE_CHANNEL
+	void Receiving_TCP();
+	void Receiving_UDP();
+#else
     void Receiving();
+#endif
 
     /** thread function for heartbeat */
     void Heartbeat();
@@ -140,8 +164,17 @@ class Van {
     size_t recv_bytes_ = 0;
     int num_servers_ = 0;
     int num_workers_ = 0;
+
+#ifdef DOUBLE_CHANNEL
+	 /** the thread for receiving tcp messages */
+    std::unique_ptr<std::thread> tcp_receiver_thread_;
+	
+	/** the thread for receiving udp messages */
+    std::unique_ptr<std::thread> udp_receiver_thread_;
+#else
     /** the thread for receiving messages */
     std::unique_ptr<std::thread> receiver_thread_;
+#endif
     /** the thread for sending heartbeat */
     std::unique_ptr<std::thread> heartbeat_thread_;
     std::vector<int> barrier_count_;
@@ -150,6 +183,9 @@ class Van {
     int drop_rate_ = 0;
     std::atomic<int> timestamp_{0};
     int init_stage = 0;
+#ifdef DOUBLE_CHANNEL
+	std::mutex mu_;
+#endif
 
     /**
      * \brief processing logic of AddNode message for scheduler

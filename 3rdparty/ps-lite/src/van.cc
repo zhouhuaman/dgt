@@ -205,9 +205,9 @@ void Van::ProcessBarrierCommand(Message* msg) {
 
 void Van::ProcessDataMsg(Message* msg) {
   // data msg
- /*  static int count = 0;
-  count++;
-  printf("Enter Van::ProcessDataMsg %d\n",count); */
+#ifdef DOUBLE_CHANNEL
+  std::lock_guard<std::mutex> lk(mu_);
+#endif
   CHECK_NE(msg->meta.sender, Meta::kEmpty);
   CHECK_NE(msg->meta.recver, Meta::kEmpty);
   CHECK_NE(msg->meta.app_id, Meta::kEmpty);
@@ -256,6 +256,9 @@ void Van::Start(int customer_id) {
   if (init_stage == 0) {
     scheduler_.hostname = std::string(CHECK_NOTNULL(Environment::Get()->find("DMLC_PS_ROOT_URI")));
     scheduler_.port = atoi(CHECK_NOTNULL(Environment::Get()->find("DMLC_PS_ROOT_PORT")));
+#ifdef DOUBLE_CHANNEL
+    scheduler_.udp_port = atoi(CHECK_NOTNULL(Environment::Get()->find("DMLC_PS_ROOT_UDP_PORT")));
+#endif
     scheduler_.role = Node::SCHEDULER;
     scheduler_.id = kScheduler;
     is_scheduler_ = Postoffice::Get()->is_scheduler();
@@ -281,6 +284,9 @@ void Van::Start(int customer_id) {
         CHECK(!interface.empty()) << "failed to get the interface";
       }
       int port = GetAvailablePort();
+#ifdef DOUBLE_CHANNEL
+	  int udp_port = GetAvailablePort();
+#endif
       const char *pstr = Environment::Get()->find("PORT");
       if (pstr) port = atoi(pstr);
       CHECK(!ip.empty()) << "failed to get ip";
@@ -288,6 +294,9 @@ void Van::Start(int customer_id) {
       my_node_.hostname = ip;
       my_node_.role = role;
       my_node_.port = port;
+#ifdef DOUBLE_CHANNEL
+	  my_node_.udp_port = udp_port;
+#endif
       // cannot determine my id now, the scheduler will assign it later
       // set it explicitly to make re-register within a same process possible
       my_node_.id = Node::kEmpty;
@@ -298,17 +307,33 @@ void Van::Start(int customer_id) {
     my_node_.port = Bind(my_node_, is_scheduler_ ? 0 : 40);
     PS_VLOG(1) << "Bind to " << my_node_.DebugString();
     CHECK_NE(my_node_.port, -1) << "bind failed";
-
+	
+#ifdef DOUBLE_CHANNEL
+	my_node_.udp_port = Bind_UDP(my_node_, is_scheduler_ ? 0 : 40);
+    PS_VLOG(1) << "Bind to " << my_node_.DebugString();
+    CHECK_NE(my_node_.port, -1) << "UDP:bind failed";
+#endif
     // connect to the scheduler
     Connect(scheduler_);
-
+#ifdef DOUBLE_CHANNEL
+	Connect_UDP(scheduler_);
+#endif
     // for debug use
     if (Environment::Get()->find("PS_DROP_MSG")) {
       drop_rate_ = atoi(Environment::Get()->find("PS_DROP_MSG"));
     }
+#ifdef DOUBLE_CHANNEL
+   // start tcp receiver
+    tcp_receiver_thread_ = std::unique_ptr<std::thread>(
+            new std::thread(&Van::Receiving_TCP, this));
+	// start udp receiver
+    udp_receiver_thread_ = std::unique_ptr<std::thread>(
+            new std::thread(&Van::Receiving_UDP, this));
+#else
     // start receiver
     receiver_thread_ = std::unique_ptr<std::thread>(
             new std::thread(&Van::Receiving, this));
+#endif
     init_stage++;
   }
   start_mu_.unlock();
@@ -364,9 +389,18 @@ void Van::Stop() {
   exit.meta.recver = my_node_.id;
   // only customer 0 would call this method
   exit.meta.customer_id = 0;
+#ifdef DOUBLE_CHANNEL
+  int ret = SendMsg_TCP(exit);
+#else
   int ret = SendMsg(exit);
+#endif
   CHECK_NE(ret, -1);
+#ifdef DOUBLE_CHANNEL
+	tcp_receiver_thread_->join();
+	udp_receiver_thread_->join();
+#else
   receiver_thread_->join();
+#endif
   init_stage = 0;
   if (!is_scheduler_) heartbeat_thread_->join();
   if (resender_) delete resender_;
@@ -378,7 +412,28 @@ void Van::Stop() {
   my_node_.id = Meta::kEmpty;
   barrier_count_.clear();
 }
-
+#ifdef DOUBLE_CHANNEL
+int Van::Send( Message& msg, int channel, int tag) {
+	int send_bytes = 0;
+  if(channel == 0){
+	  send_bytes = SendMsg_TCP(msg, tag);
+  }else{
+	  send_bytes = SendMsg_UDP(msg, tag);
+	if (resender_) {
+	  //std::cout << "Van::Send, record outgoing msg" << std::endl;
+	  resender_->AddOutgoing(msg);
+	}
+  }
+  //std::cout << "Van::Send, send " << send_bytes << "bytes" << std::endl;
+  CHECK_NE(send_bytes, -1);
+  send_bytes_ += send_bytes;
+  
+  if (Postoffice::Get()->verbose() >= 2) {
+    PS_VLOG(2) << msg.DebugString();
+  }
+  return send_bytes;
+}
+#else
 int Van::Send( Message& msg) {
   static unsigned int count = 0;
   count++;
@@ -396,7 +451,108 @@ int Van::Send( Message& msg) {
   }
   return send_bytes;
 }
+#endif
 
+/*if DOUBLE_CHANNEL, Receiving => Receiving_TCP and Receiving_UDP*/
+#ifdef DOUBLE_CHANNEL
+void Van::Receiving_TCP() {
+  Meta nodes;
+  Meta recovery_nodes;  // store recovery nodes
+  recovery_nodes.control.cmd = Control::ADD_NODE;
+
+  while (true) {
+    Message msg;
+    int recv_bytes = RecvMsg_TCP(&msg);
+	
+    // For debug, drop received message
+    if (ready_.load() && drop_rate_ > 0) {
+      unsigned seed = time(NULL) + my_node_.id;
+      if (rand_r(&seed) % 100 < drop_rate_) {
+        LOG(WARNING) << "Drop message " << msg.DebugString();
+        continue;
+      }
+    }
+
+    CHECK_NE(recv_bytes, -1);
+    recv_bytes_ += recv_bytes;
+    if (Postoffice::Get()->verbose() >= 2) {
+      PS_VLOG(2) << msg.DebugString();
+    }
+	
+    /* // duplicated message
+    if (resender_ && resender_->AddIncomming(msg)) continue; */
+
+	if (!msg.meta.control.empty()) {
+      // control msg
+      auto& ctrl = msg.meta.control;
+      if (ctrl.cmd == Control::TERMINATE) {
+        ProcessTerminateCommand();
+        break;
+      } else if (ctrl.cmd == Control::ADD_NODE) {
+        ProcessAddNodeCommand(&msg, &nodes, &recovery_nodes);
+      } else if (ctrl.cmd == Control::BARRIER) {
+        ProcessBarrierCommand(&msg);
+      } else if (ctrl.cmd == Control::HEARTBEAT) {
+        ProcessHearbeat(&msg);
+	  }else {
+        LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
+      }
+    } else {
+      ProcessDataMsg(&msg);
+    }
+  }
+}
+
+void Van::Receiving_UDP() {
+  Meta nodes;
+  Meta recovery_nodes;  // store recovery nodes
+  recovery_nodes.control.cmd = Control::ADD_NODE;
+
+  while (true) {
+    Message msg;
+    int recv_bytes = RecvMsg_UDP(&msg);
+	
+    // For debug, drop received message
+    if (ready_.load() && drop_rate_ > 0) {
+      unsigned seed = time(NULL) + my_node_.id;
+      if (rand_r(&seed) % 100 < drop_rate_) {
+        LOG(WARNING) << "Drop message " << msg.DebugString();
+        continue;
+      }
+    }
+
+    CHECK_NE(recv_bytes, -1);
+    recv_bytes_ += recv_bytes;
+    if (Postoffice::Get()->verbose() >= 2) {
+      PS_VLOG(2) << msg.DebugString();
+    }
+	
+    // duplicated message
+    if (resender_ && resender_->AddIncomming(msg)) continue;
+
+	if (!msg.meta.control.empty()) {
+      // control msg
+      auto& ctrl = msg.meta.control;
+      if (ctrl.cmd == Control::TERMINATE) {
+        ProcessTerminateCommand();
+        break;
+      } else if (ctrl.cmd == Control::ADD_NODE) {
+        ProcessAddNodeCommand(&msg, &nodes, &recovery_nodes);
+      } else if (ctrl.cmd == Control::BARRIER) {
+        ProcessBarrierCommand(&msg);
+      } else if (ctrl.cmd == Control::HEARTBEAT) {
+        ProcessHearbeat(&msg);
+	  }else {
+        LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
+      }
+    } else {
+	 
+      ProcessDataMsg(&msg);
+    }
+  }
+}
+#else
+/*old version Receiving*/
 void Van::Receiving() {
   Meta nodes;
   Meta recovery_nodes;  // store recovery nodes
@@ -420,39 +576,10 @@ void Van::Receiving() {
     if (Postoffice::Get()->verbose() >= 2) {
       PS_VLOG(2) << msg.DebugString();
     }
-	 if(msg.data.size() > 0){
-		  if(msg.data[0][0] > 100000){
-				std::cout << "Van->Receiving#419:find error key" << msg.data[0] << msg.meta.DebugString() << std::endl;
-		   }
-		  
-	  }
+	
     // duplicated message
     if (resender_ && resender_->AddIncomming(msg)) continue;
-/* #ifdef UDP_CHANNEL
-    if (!msg.meta.control.empty()) {
-      // control msg
-      auto& ctrl = msg.meta.control;
-      if (ctrl.cmd == Control::TERMINATE) {
-        ProcessTerminateCommand();
-        break;
-      } else if (ctrl.cmd == Control::ADD_NODE) {
-        ProcessAddNodeCommand(&msg, &nodes, &recovery_nodes);
-      } else if (ctrl.cmd == Control::BARRIER) {
-        ProcessBarrierCommand(&msg);
-      } else if (ctrl.cmd == Control::HEARTBEAT) {
-        ProcessHearbeat(&msg);
-      }else if(ctrl.cmd == Control::DATA){
-		ProcessDataMsg(&msg);
-	  }else {
-        LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
-      }
-    } else {
-	  /* static int count = 0;
-	  count++;
-	  printf("Recve a DataMsg = %d\n",count); 
-      ProcessDataMsg(&msg);
-    }
-#else */
+
 	if (!msg.meta.control.empty()) {
       // control msg
       auto& ctrl = msg.meta.control;
@@ -469,15 +596,12 @@ void Van::Receiving() {
         LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
       }
     } else {
-	  /* static int count = 0;
-	  count++;
-	  printf("Recve a DataMsg = %d\n",count); */
+	 
       ProcessDataMsg(&msg);
     }
-//#endif
   }
 }
-
+#endif
 void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   // convert into protobuf
   PBMeta pb;

@@ -12,6 +12,8 @@
 
 #define LITTLE_GRAIN_MSG
 #define UDP_CHANNEL
+#define DOUBLE_CHANNEL
+#define TCP_MIN_MSG_SIZE 4096*400
 namespace ps {
 /** \brief data type */
 enum DataType {
@@ -68,7 +70,11 @@ struct Node {
   /** \brief the empty value */
   static const int kEmpty;
   /** \brief default constructor */
+#ifdef UDP_CHANNEL
+  Node() : id(kEmpty), port(kEmpty), udp_port(kEmpty), is_recovery(false) {}
+#else
   Node() : id(kEmpty), port(kEmpty), is_recovery(false) {}
+#endif
   /** \brief node roles */
   enum Role { SERVER, WORKER, SCHEDULER };
   /** \brief get debug string */
@@ -76,7 +82,7 @@ struct Node {
     std::stringstream ss;
     ss << "role=" << (role == SERVER ? "server" : (role == WORKER ? "worker" : "scheduler"))
        << (id != kEmpty ? ", id=" + std::to_string(id) : "")
-       << ", ip=" << hostname << ", port=" << port << ", is_recovery=" << is_recovery;
+       << ", ip=" << hostname << ", port=" << port << ", udp_port" << udp_port << ", is_recovery=" << is_recovery;
 
     return ss.str();
   }
@@ -96,6 +102,10 @@ struct Node {
   std::string hostname;
   /** \brief the port this node is binding */
   int port;
+#ifdef DOUBLE_CHANNEL
+  /** \brief the udp port this node is binding */
+  int udp_port;
+#endif
   /** \brief whether this node is created by failover */
   bool is_recovery;
 };

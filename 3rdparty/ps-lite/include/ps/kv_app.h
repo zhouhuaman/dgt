@@ -10,7 +10,7 @@
 #include "ps/simple_app.h"
 #include <unistd.h>
 #include "ps/internal/message.h"
-
+#include <zmq.h>
 #ifndef LITTLE_GRAIN_MSG
 #define LITTLE_GRAIN_MSG
 #endif
@@ -312,6 +312,7 @@ class KVServer : public SimpleApp {
   explicit KVServer(int app_id) : SimpleApp() {
     using namespace std::placeholders;
     obj_ = new Customer(app_id, app_id, std::bind(&KVServer<Val>::Process, this, _1));
+
   }
 
   /** \brief deconstructor */
@@ -343,6 +344,7 @@ class KVServer : public SimpleApp {
   void Process(const Message& msg);
   /** \brief request handle */
   ReqHandle request_handle_;
+
 };
 
 
@@ -447,11 +449,13 @@ void KVServer<Val>::Response(const KVMeta& req, const KVPairs<Val>& res) {
 #endif
     }
   }
-  /* int n = msg.data.size();
-  msg.meta.data_num = n;
-  msg.meta.data_len.clear();
-	for(int i = 0; i < n; ++i){
-		msg.meta.data_len.push_back(msg.data[i].size());
+  /* if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
+		tcp_tag = ZMQ_SNDMORE;
+    }
+	send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
+	if(tcp_tag == ZMQ_SNDMORE){
+		send_bytes = 0;
+		tcp_tag = 0;
 	} */
   Postoffice::Get()->van()->Send(msg);
 }
@@ -551,17 +555,14 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
     RunCallback(timestamp);
   }
 #endif
-  if(push == true){
-	//std::cout << "slice.size = " << sliced.size() << std::endl;
-	//std::cout << "kv_app.h #529" << std::endl;
-  }
-  //std::cout << "kv_app.h #530\n" << std::endl;
   for (size_t i = 0; i < sliced.size(); ++i) {
 	
     const auto& s = sliced[i];
     if (!s.first) continue;
 #ifdef LITTLE_GRAIN_MSG
-	
+	unsigned int send_bytes = 0;
+	int tcp_tag = 0;
+	int udp_tag = 0;
 	const auto& tmp_kvs = s.second;
 	size_t n = tmp_kvs.keys.size();
 	size_t val_begin = 0, val_end = 0;
@@ -589,20 +590,13 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 		}else{
 			tmp_kv.vals = tmp_kvs.vals.segment(j*k, (j+1)*k);
 		}
-/* #ifdef UDP_CHANNEL
-		msg.meta.data_num = 0;
-#endif */
+
 		if (tmp_kv.keys.size()) {
 
 		  msg.AddData(tmp_kv.keys);
 #ifdef UDP_CHANNEL
 		  msg.meta.keys_len = msg.data.back().size();
 #endif
-
-		  if(msg.meta.push == true){
-			/*   std::cout << "recver" << msg.meta.recver << std::endl;
-			  std::cout << tmp_kv.keys << std::endl; */
-		  }
 		  msg.AddData(tmp_kv.vals);
 #ifdef UDP_CHANNEL
 		 msg.meta.vals_len = msg.data.back().size();
@@ -612,32 +606,34 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 #ifdef UDP_CHANNEL
 			msg.meta.lens_len = msg.data.back().size();
 #endif
-			if(msg.meta.push == true){
-				/* std::cout << tmp_kv.lens << std::endl; */
-			}
+			
 		  }
 		}
-		/* if(msg.meta.push == true){
-			std::cout << "-----------------------------------------------" << std::endl;
-		} */
-		//printf("################################\n");
-		//std::cout << "msg.meta.timestamp = " <<msg.meta.timestamp << " tracker_num = " << msg.meta.tracker_num << std::endl;
-		//usleep(100000);
-/* #ifdef UDP_CHANNEL
-		int n = msg.data.size();
-		msg.meta.data_num = n;
-		for(int i = 0; i < n; ++i){
-			msg.meta.data_len.push_back(msg.data[i].size());
-		}
-		std::cout << "$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$" << std::endl;
-		  std::cout << "msg->meta.data_num = " << msg.meta.data_num << std::endl;
-		    for(int i = 0; i < msg.meta.data_num; ++i){
-				std::cout << "msg->meta.data_len[i]"  << msg.meta.data_len[i] << std::endl;
-			}
-#endif */
-		
 		usleep(100);
-		Postoffice::Get()->van()->Send(msg);
+		if(msg.meta.push){ //part of push msg use tcp channel
+			if(msg.meta.first_key % 2 == 0){
+				if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
+					tcp_tag = ZMQ_SNDMORE;
+				}
+				send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
+				if(tcp_tag == ZMQ_SNDMORE){
+					send_bytes = 0;
+					tcp_tag = 0;
+				}
+			}else{
+				Postoffice::Get()->van()->Send(msg,1,udp_tag);
+			}
+		}else{ //all pull msg use tcp channel
+			if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
+				tcp_tag = ZMQ_SNDMORE;
+			}
+			send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
+			if(tcp_tag == ZMQ_SNDMORE){
+				send_bytes = 0;
+				tcp_tag = 0;
+			}
+		}
+		
 	}
 #else
     Message msg;
