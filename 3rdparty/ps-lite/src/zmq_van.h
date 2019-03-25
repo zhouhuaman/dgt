@@ -135,7 +135,7 @@ int Bind_UDP(const Node& node, int max_retry) override {
       LOG(FATAL) <<  "UDP:connect to " + addr + " failed: " + zmq_strerror(errno);
     }
     udp_senders_[id] = udp_sender;
-	std::cout << "UDP: Connect SUCCESS!!" << std::endl;
+	std::cout << "UDP: Connect  to" << node.DebugString()<<" SUCCESS!!" << std::endl;
   }
 #endif
   int Bind(const Node& node, int max_retry) override {
@@ -160,7 +160,7 @@ int Bind_UDP(const Node& node, int max_retry) override {
         port = 10000 + rand_r(&seed) % 40000;
       }
     }
-    std::cout << "TCP:Bind SUCCESS!!"<< std::endl;
+    std::cout << "TCP:Bind SUCCESS!! port = "<< port << std::endl;
     return port;
   }
 
@@ -203,7 +203,7 @@ int Bind_UDP(const Node& node, int max_retry) override {
       LOG(FATAL) <<  "connect to " + addr + " failed: " + zmq_strerror(errno);
     }
     senders_[id] = sender;
-	std::cout << "TCP:Connect SUCCESS!!" << std::endl;
+	std::cout << "TCP:Connect  to" << node.DebugString()<<"  SUCCESS!!" << std::endl;
   }
   
 /*if DOUBLE_CHANNEL, SendMsg=> SendMsg_TCP and SendMsg_UDP*/
@@ -458,7 +458,13 @@ int RecvMsg_TCP(Message* msg) override {
       char* buf = CHECK_NOTNULL((char *)zmq_msg_data(zmsg));
       size_t size = zmq_msg_size(zmsg);
       recv_bytes += size;
-
+	  if(!identify_flag){
+		  identify_flag = true;
+		  zmq_msg_close(zmsg);
+		  delete zmsg;
+		  continue;
+	  }
+	  
 	  int  meta_size;
 	  int addr_offset = 0;
 	  memcpy((void*)&meta_size, buf+addr_offset, sizeof(meta_size));
@@ -498,7 +504,7 @@ int RecvMsg_TCP(Message* msg) override {
 				addr_offset += msg->meta.vals_len;
 			}	   
 	    }	
-		
+		if (!zmq_msg_more(zmsg)) { identify_flag = false; }
 	  break;
     }
     return recv_bytes;
@@ -583,6 +589,7 @@ int RecvMsg(Message* msg) override {
 #ifdef DOUBLE_CHANNEL
   std::unordered_map<int, void*> udp_senders_;
   void *udp_receiver_ = nullptr;
+  bool identify_flag = false; //if or not read the identify already
 #endif
   std::mutex mu_;
   void *receiver_ = nullptr;

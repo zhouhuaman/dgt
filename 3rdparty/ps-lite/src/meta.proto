@@ -13,10 +13,12 @@ message PBNode {
   optional string hostname = 3;
   // the port this node is binding
   optional int32 port = 4;
+  optional int32 udp_port = 5;
   // whether this node is created by failover
-  optional bool is_recovery = 5;
+  optional bool is_recovery = 6;
   // the locally unique id of an customer
   optional int32 customer_id = 10;
+  
 }
 
 // system control info

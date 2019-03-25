@@ -121,7 +121,7 @@ class Resender {
       ack.meta.sender = msg.meta.recver;
       ack.meta.control.cmd = Control::ACK;
       ack.meta.control.msg_sig = key;
-      van_->Send(ack);
+      van_->Send(ack,1,0);
       // warning
       if (duplicated) LOG(WARNING) << "Duplicated message: " << msg.DebugString() << "key:" << key << "at role = " << van_->my_node().role << std::endl;
       return duplicated;
@@ -216,7 +216,7 @@ class Resender {
       }
       mu_.unlock();
 
-      for (auto& msg : resend) van_->Send(msg);
+      for (auto& msg : resend) van_->Send(msg,1,0);
     }
   }
   std::thread* monitor_;

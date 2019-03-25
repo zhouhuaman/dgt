@@ -55,7 +55,12 @@ void Van::ProcessAddNodeCommandAtScheduler(
                  Postoffice::WorkerRankToID(num_workers_);
         PS_VLOG(1) << "assign rank=" << id << " to node " << node.DebugString();
         node.id = id;
+#ifdef DOUBLE_CHANNEL
+		Connect(node);
+		Connect_UDP(node);
+#else  
         Connect(node);
+#endif
         Postoffice::Get()->UpdateHeartbeat(node.id, t);
         connected_nodes_[node_host_ip] = id;
       } else {
@@ -238,7 +243,12 @@ void Van::ProcessAddNodeCommand(Message* msg, Meta* nodes, Meta* recovery_nodes)
     for (const auto& node : ctrl.node) {
       std::string addr_str = node.hostname + ":" + std::to_string(node.port);
       if (connected_nodes_.find(addr_str) == connected_nodes_.end()) {
+#ifdef DOUBLE_CHANNEL
+	   Connect(node);
+	   Connect_UDP(node);
+#else
         Connect(node);
+#endif
         connected_nodes_[addr_str] = node.id;
       }
       if (!node.is_recovery && node.role == Node::SERVER) ++num_servers_;
@@ -306,7 +316,7 @@ void Van::Start(int customer_id) {
     // bind.
     my_node_.port = Bind(my_node_, is_scheduler_ ? 0 : 40);
     PS_VLOG(1) << "Bind to " << my_node_.DebugString();
-    CHECK_NE(my_node_.port, -1) << "bind failed";
+    CHECK_NE(my_node_.port, -1) << "TCP:bind failed";
 	
 #ifdef DOUBLE_CHANNEL
 	my_node_.udp_port = Bind_UDP(my_node_, is_scheduler_ ? 0 : 40);
@@ -322,6 +332,7 @@ void Van::Start(int customer_id) {
     if (Environment::Get()->find("PS_DROP_MSG")) {
       drop_rate_ = atoi(Environment::Get()->find("PS_DROP_MSG"));
     }
+	std::cout << "#325 at "<< my_node_.DebugString() << std::endl;
 #ifdef DOUBLE_CHANNEL
    // start tcp receiver
     tcp_receiver_thread_ = std::unique_ptr<std::thread>(
@@ -330,10 +341,12 @@ void Van::Start(int customer_id) {
     udp_receiver_thread_ = std::unique_ptr<std::thread>(
             new std::thread(&Van::Receiving_UDP, this));
 #else
+	
     // start receiver
     receiver_thread_ = std::unique_ptr<std::thread>(
             new std::thread(&Van::Receiving, this));
 #endif
+	std::cout << "#334 at "<< my_node_.DebugString() << std::endl;
     init_stage++;
   }
   start_mu_.unlock();
@@ -380,6 +393,7 @@ void Van::Start(int customer_id) {
     init_stage++;
   }
   start_mu_.unlock();
+  std::cout <<my_node_.DebugString() << "start success !!";
 }
 
 void Van::Stop() {
@@ -429,7 +443,7 @@ int Van::Send( Message& msg, int channel, int tag) {
   send_bytes_ += send_bytes;
   
   if (Postoffice::Get()->verbose() >= 2) {
-    PS_VLOG(2) << msg.DebugString();
+    PS_VLOG(2) << "send_bytes = "<<send_bytes<<msg.DebugString();
   }
   return send_bytes;
 }
@@ -638,6 +652,9 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
       p->set_id(n.id);
       p->set_role(n.role);
       p->set_port(n.port);
+#ifdef DOUBLE_CHANNEL
+	  p->set_udp_port(n.udp_port);
+#endif
       p->set_hostname(n.hostname);
       p->set_is_recovery(n.is_recovery);
       p->set_customer_id(n.customer_id);
@@ -690,6 +707,9 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
       Node n;
       n.role = static_cast<Node::Role>(p.role());
       n.port = p.port();
+#ifdef DOUBLE_CHANNEL
+	  n.udp_port = p.udp_port();
+#endif
       n.hostname = p.hostname();
       n.id = p.has_id() ? p.id() : Node::kEmpty;
       n.is_recovery = p.is_recovery();

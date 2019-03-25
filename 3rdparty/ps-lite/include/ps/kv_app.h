@@ -561,7 +561,7 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
     if (!s.first) continue;
 #ifdef LITTLE_GRAIN_MSG
 	unsigned int send_bytes = 0;
-	int tcp_tag = 0;
+	int tcp_tag = ZMQ_SNDMORE;
 	int udp_tag = 0;
 	const auto& tmp_kvs = s.second;
 	size_t n = tmp_kvs.keys.size();
@@ -609,8 +609,8 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 			
 		  }
 		}
-		usleep(100);
-		if(msg.meta.push){ //part of push msg use tcp channel
+		//usleep(100);
+		/* if(msg.meta.push){ //part of push msg use tcp channel
 			if(msg.meta.first_key % 2 == 0){
 				if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
 					tcp_tag = ZMQ_SNDMORE;
@@ -632,8 +632,21 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 				send_bytes = 0;
 				tcp_tag = 0;
 			}
+		} */
+		/* if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
+				tcp_tag = 0;
+			}
+			send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
+			if(tcp_tag == 0){
+				send_bytes = 0;
+				tcp_tag = ZMQ_SNDMORE;
+		 } */
+		//Postoffice::Get()->van()->Send(msg,0,tcp_tag);
+		if(msg.meta.push){
+			Postoffice::Get()->van()->Send(msg,1,udp_tag);
+		}else{
+			Postoffice::Get()->van()->Send(msg,0,0);
 		}
-		
 	}
 #else
     Message msg;
