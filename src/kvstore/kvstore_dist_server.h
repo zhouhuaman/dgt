@@ -38,12 +38,19 @@
 #include "../profiler/profiler.h"
 #include "../operator/tensor/elemwise_binary_op-inl.h"
 #include "../operator/tensor/init_op.h"
-
+#include <stdlib.h>
 #include "kvstore_dist.h"
 
 #ifndef FINE_GRAIN_MSG
 #define FINE_GRAIN_MSG
 #endif
+#ifndef GRAD_RECOVERY
+#define GRAD_RECOVERY
+#endif
+
+/* #ifndef RECV_RANDOM_DROP
+#define RECV_RANDOM_DROP
+#endif */
 namespace mxnet {
 namespace kvstore {
 
@@ -197,8 +204,11 @@ class KVStoreDistServer {
   struct UpdateBuf {
     std::vector<ps::KVMeta> request;
     NDArray merged;
-    // temp_array is used to cast received values as float32 for computation if required
+    // temp_array is used to cast received values as float32 for computation if required,ifdefine GRAD_RECOVERY, used to store pre-veriage-grad
     NDArray temp_array;
+#ifdef GRAD_RECOVERY
+	int update_num = 0;
+#endif
   };
 
   void CommandHandle(const ps::SimpleData& recved, ps::SimpleApp* app) {
@@ -359,12 +369,75 @@ class KVStoreDistServer {
           CHECK(updater_);
           updater_(key, update, &stored);
         });
+		
       } else {
         CHECK(sync_mode_) << "Updater needs to be set for async mode";
         // if no updater, just copy
         CopyFromTo(update_buf->merged, &stored);
       }
-
+#ifdef GRAD_RECOVERY
+      update_buf->update_num += 1;
+	  //CopyFromTo(update_buf->merged / (size_t) ps::NumWorkers(), update_buf->temp_array);
+	  //update_buf->temp_array.WaitToRead();
+	  if(!update_buf->request.empty() && key == update_buf->request[0].key_end){
+		  // find the last key and check if some key haven't updated
+		  int key_begin = update_buf->request[0].key_begin;
+		  int key_end = update_buf->request[0].key_end;
+		  for(int i = key_begin; i<key_end; ++i){
+			  auto &tmp_update_buf = update_buf_[i];
+			  auto& tmp_stored = has_multi_precision_copy(type) ? store_realt_[i] : store_[i];
+			  if(tmp_update_buf.update_num < update_buf->update_num){
+				  //means the key i haven't updated
+				  //if the first grad push haven't came in, then .merged is none and .temp_array is none
+				  if (sync_mode_ && tmp_update_buf.merged.is_none()) {
+					  tmp_update_buf.merged = NDArray(tmp_stored.shape(), Context(), false,
+											   has_multi_precision_copy(type) ? mshadow::kFloat32 : type.dtype);
+					}
+				   if (tmp_update_buf.temp_array.is_none()) {
+					  tmp_update_buf.temp_array = NDArray(tmp_stored.shape(), Context(), false, mshadow::kFloat32);
+					  //tmep_array init to zeros array
+					  SampleUniform(0,0, &tmp_update_buf.temp_array);
+					}
+					int lost_worker_num = (size_t) ps::NumWorkers() - tmp_update_buf.request.size();
+					for(int j = 0; j < lost_worker_num; ++j){
+						if(tmp_update_buf.request.size() == 0){
+							CopyFromTo(tmp_update_buf.temp_array, tmp_update_buf.merged);
+							tmp_update_buf.merged.WaitToRead();
+							continue;
+						}
+						/* tmp_update_buf.merged += tmp_update_buf.temp_array;
+						tmp_update_buf.merged.WaitToRead(); */
+					}
+					//std::cout << "key = " << i << "lost_worker_num = " << lost_worker_num << std::endl;
+					//now .merged is complete, can be updated.
+					
+				    auto& tmp_update =  tmp_update_buf.merged;
+					if (updater_) {
+						exec_.Exec([this, i, &tmp_update, &tmp_stored](){
+						  CHECK(updater_);
+						  updater_(i, tmp_update, &tmp_stored);
+						});
+					}else{
+                        CHECK(sync_mode_) << "Updater needs to be set for async mode";
+                        // if no updater, just copy
+                        CopyFromTo(tmp_update_buf.merged, &tmp_stored);
+                    }
+					//then temp_array = merge/num_worker
+					
+					/* CopyFromTo(tmp_update_buf.merged / (size_t) ps::NumWorkers(), tmp_update_buf.temp_array);
+					tmp_update_buf.temp_array.WaitToRead(); */
+					tmp_update_buf.update_num += 1;
+                    for (const auto& req : tmp_update_buf.request) {
+                        //printf("response to %d:%d\n",req.sender,req.timestamp);
+                        server->Response(req);
+                      }
+					tmp_update_buf.request.clear();
+		
+			  }
+			  
+		  }
+	  }
+#endif
       if (log_verbose_)  {
         LOG(INFO) << "sent response to " << update_buf->request.size() << " workers";
       }
@@ -755,10 +828,26 @@ class KVStoreDistServer {
 				if (sync_mode_ && updates.merged.is_none()) {
 				  updates.merged = NDArray(dshape, Context(), false,
 										   has_multi_precision_copy(type) ? mshadow::kFloat32 : type.dtype);
+#ifdef GRAD_RECOVERY
+				  if (updates.temp_array.is_none()) {
+					  updates.temp_array = NDArray(dshape, Context(), false, mshadow::kFloat32);
+					  //tmep_array init to zeros array
+					  SampleUniform(0,0, &updates.temp_array);
+					}
+#endif
 				}
 				if (has_multi_precision_copy(type) && updates.temp_array.is_none()) {
 				  updates.temp_array = NDArray(dshape, Context(), false, mshadow::kFloat32);
 				}
+#ifdef RECV_RANDOM_DROP  //drop recv msg according some probability of 10%
+                srand((unsigned)time(NULL));
+                int rn = rand()%100;
+                if(rn < 20 && req_meta.first_key != req_meta.key_end){
+                    updates.request.push_back(req_meta);
+                    ApplyUpdates(type, key, &updates, server);
+                    continue;
+                }
+#endif
 				if (updates.request.empty()) {
 				  if (sync_mode_) {
 					CopyFromTo(recved, updates.merged);

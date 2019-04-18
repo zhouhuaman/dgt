@@ -77,6 +77,14 @@ int Bind_UDP(const Node& node, int max_retry) override {
 	udp_receiver_ = zmq_socket(context_, ZMQ_DISH);
 	CHECK(udp_receiver_ != NULL)
         << "create udp_receiver socket failed: " << zmq_strerror(errno);
+	int udp_recv_buf_size = 4096*1024;  //4M 
+	int rc = zmq_setsockopt(udp_receiver_, ZMQ_RCVBUF, &udp_recv_buf_size, sizeof(udp_recv_buf_size));
+	assert(rc == 0);
+	int check_rcv_buff = 0;
+	size_t check_len = sizeof(check_rcv_buff);
+	rc = zmq_getsockopt(udp_receiver_, ZMQ_RCVBUF, &check_rcv_buff, &check_len);
+	
+	std::cout << "recv buf size = " << check_rcv_buff << std::endl;
     int local = GetEnv("DMLC_LOCAL", 0);
     std::string hostname = node.hostname.empty() ? "*" : node.hostname;
     int use_kubernetes = GetEnv("DMLC_USE_KUBERNETES", 0);
@@ -96,7 +104,7 @@ int Bind_UDP(const Node& node, int max_retry) override {
         udp_port = 10000 + rand_r(&seed) % 40000;
       }
     }
-	int rc = zmq_join(udp_receiver_, "GRADIENT");
+	rc = zmq_join(udp_receiver_, "GRADIENT");
 	assert(rc == 0);
     std::cout << "Bind Udp channel SUCCESS!!"<< std::endl;
     return udp_port;
@@ -126,6 +134,13 @@ int Bind_UDP(const Node& node, int max_retry) override {
       std::string my_id = "ps" + std::to_string(my_node_.id);
       zmq_setsockopt(udp_sender, ZMQ_IDENTITY, my_id.data(), my_id.size());
     }
+	int udp_send_buf_size = 4096*1024;  //4M 
+	int rc = zmq_setsockopt(udp_sender, ZMQ_SNDBUF, &udp_send_buf_size, sizeof(udp_send_buf_size));
+	assert(rc == 0);
+	int check_snd_buff = 0;
+	size_t check_len = sizeof(check_snd_buff);
+	rc = zmq_getsockopt(udp_sender, ZMQ_SNDBUF, &check_snd_buff, &check_len);
+	std::cout << "send buf size = " << check_snd_buff << std::endl;
     // connect
 	std::string addr = "udp://" + node.hostname + ":" + std::to_string(node.udp_port);
     if (GetEnv("DMLC_LOCAL", 0)) {

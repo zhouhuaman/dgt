@@ -511,10 +511,13 @@ class BaseModule(object):
         ################################################################################
         # training loop
         ################################################################################
-	#f = open("./acc_record/test.csv","w")
-        #wf = csv.writer(f);
+        f = open("./test.csv","w+")
+        t_f = open("./test_time.csv","w+")
+        wf = csv.writer(f)
+        wt_f = csv.writer(t_f)
         print("Enter fit") 
         self.logger.info('Enter fit')
+        tic_test = time.time();
         for epoch in range(begin_epoch, num_epoch):
             tic = time.time()
             eval_metric.reset()
@@ -580,8 +583,13 @@ class BaseModule(object):
                 #TODO: pull this into default
                 for name, val in res:
                     self.logger.info('Epoch[%d] Validation-%s=%f', epoch, name, val)
-	#	    wf.writerow([epoch,val])
+                    rc = wf.writerow([epoch,val])
+                    self.logger.info('write %d bytes to wf', rc)
+                    wt_f.writerow([toc-tic_test, val])
+                    f.flush()
+                    t_f.flush()
 
+           
             # end of 1 epoch, reset the data-iter for another epoch
             train_data.reset()
 

@@ -372,7 +372,7 @@ void Van::Start(int customer_id) {
   if (init_stage == 1) {
     // resender
 #ifdef UDP_CHANNEL
-      int timeout = 1000;
+      int timeout = 100;
 	  std::cout << my_node_.role << ":" << "start resender_" << std::endl;
       resender_ = new Resender(timeout, 10, this);
 #else
@@ -433,10 +433,19 @@ int Van::Send( Message& msg, int channel, int tag) {
 	  send_bytes = SendMsg_TCP(msg, tag);
   }else{
 	  send_bytes = SendMsg_UDP(msg, tag);
-	if (resender_) {
-	  //std::cout << "Van::Send, record outgoing msg" << std::endl;
-	  resender_->AddOutgoing(msg);
-	}
+	  if(msg.meta.udp_reliable){
+		  if (resender_) {
+		  //std::cout << "Van::Send, record outgoing msg" << std::endl;
+		  resender_->AddOutgoing(msg);
+		}
+	  }
+	  /* static uint64_t udp_snd_msg_cnt = 0;
+	  if(send_bytes > 0) udp_snd_msg_cnt++;
+	  if(msg.meta.udp_reliable){
+		  std::cout << " udp_snd_msg_cnt = " <<  udp_snd_msg_cnt << std::endl;
+		  udp_snd_msg_cnt = 0;
+	  } */
+	
   }
   //std::cout << "Van::Send, send " << send_bytes << "bytes" << std::endl;
   CHECK_NE(send_bytes, -1);
@@ -493,9 +502,11 @@ void Van::Receiving_TCP() {
       PS_VLOG(2) << msg.DebugString();
     }
 	
-    /* // duplicated message
-    if (resender_ && resender_->AddIncomming(msg)) continue; */
-
+    // duplicated message
+    //if (resender_ && resender_->AddIncomming(msg)) continue;
+	/* if(msg.meta.push && msg.meta.request){
+		if (resender_ && resender_->AddIncomming_Push(msg)) continue;
+	} */
 	if (!msg.meta.control.empty()) {
       // control msg
       auto& ctrl = msg.meta.control;
@@ -513,6 +524,34 @@ void Van::Receiving_TCP() {
       }
     } else {
       ProcessDataMsg(&msg);
+	  /* if(msg.meta.push && msg.meta.request && msg.meta.first_key == msg.meta.key_end){
+		  
+		  for(std::vector<Resender::Push_Entry>::iterator it = resender_->push_rcv_buff_[msg.meta.sender].begin(); it != resender_->push_rcv_buff_[msg.meta.sender].end(); ++it){
+			  if(it->incomming_msg_cnt < resender_->push_rcv_buff_[msg.meta.sender][msg.meta.key_end].incomming_msg_cnt){
+				  // means the key's msg has lost
+				 if(it->pre_msg_seq != 0){
+					   std::cout << "#history:incomming_msg_cnt = " << it->incomming_msg_cnt <<"("<<resender_->push_rcv_buff_[msg.meta.sender][msg.meta.key_end].incomming_msg_cnt << ")" << " Recovery MSG:" << it->pre_msg.DebugString() << std::endl;
+					   //ProcessDataMsg(&it->pre_msg); //use the history msg
+				 }else{
+					 Message tmp_msg;
+					 tmp_msg.meta = msg.meta;
+					 tmp_msg.meta.first_key = std::distance(resender_->push_rcv_buff_[msg.meta.sender].begin(),it);
+					 tmp_msg.meta.keys_len = sizeof(uint64_t);
+					 tmp_msg.meta.vals_len = MAX_MSG_LIMIT;
+					 tmp_msg.meta.lens_len = sizeof(int);
+					 tmp_msg.data.resize(3);
+					 uint64_t tmp_key = (uint64_t)tmp_msg.meta.first_key;
+					 tmp_msg.data[0].reset((char*)&tmp_key, sizeof(tmp_key), [](char* p){});
+					 tmp_msg.data[1].resize(MAX_MSG_LIMIT);
+					 tmp_msg.data[2].reset((char*)&tmp_msg.meta.lens_len, sizeof(tmp_msg.meta.lens_len), [](char* p){});
+					 std::cout << "#zero:incomming_msg_cnt = " << it->incomming_msg_cnt <<"("<<resender_->push_rcv_buff_[msg.meta.sender][msg.meta.key_end].incomming_msg_cnt << ")" << "Recovery MSG:" << tmp_msg.DebugString() << std::endl;
+					 //ProcessDataMsg(&tmp_msg);
+					 it->incomming_msg_cnt += 1;
+				 }
+			  }
+		  }
+		  
+	  } */
     }
   }
 }
@@ -541,9 +580,16 @@ void Van::Receiving_UDP() {
       PS_VLOG(2) << msg.DebugString();
     }
 	
+	 /* static uint64_t udp_rcv_msg_cnt = 0;
+	  if(recv_bytes > 0) udp_rcv_msg_cnt++;
+	  if(msg.meta.udp_reliable){
+		  std::cout << " udp_rcv_msg_cnt = " <<  udp_rcv_msg_cnt << std::endl;
+		  udp_rcv_msg_cnt = 0;
+	  } */
     // duplicated message
-    if (resender_ && resender_->AddIncomming(msg)) continue;
-
+	if(msg.meta.control.cmd == Control::ACK || msg.meta.udp_reliable){
+		if (resender_ && resender_->AddIncomming(msg)) continue;
+	}
 	if (!msg.meta.control.empty()) {
       // control msg
       auto& ctrl = msg.meta.control;
@@ -560,8 +606,10 @@ void Van::Receiving_UDP() {
         LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
       }
     } else {
-	 
+	  
       ProcessDataMsg(&msg);
+	  
+	  
     }
   }
 }
@@ -610,8 +658,9 @@ void Van::Receiving() {
         LOG(WARNING) << "Drop unknown typed message " << msg.DebugString();
       }
     } else {
-	 
+	  
       ProcessDataMsg(&msg);
+	  
     }
   }
 }
@@ -633,6 +682,10 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   pb.set_sender(my_node_.id);
   pb.set_recver(meta.recver);
   pb.set_first_key(meta.first_key);
+  
+  pb.set_key_begin(meta.key_begin);
+  pb.set_key_end(meta.key_end);
+  pb.set_udp_reliable(meta.udp_reliable);
 #endif
   pb.set_push(meta.push);
   pb.set_request(meta.request);
@@ -687,6 +740,11 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
   meta->sender = pb.sender();
   meta->recver = pb.recver();
   meta->first_key = pb.first_key();
+  
+  meta->key_begin = pb.key_begin();
+  meta->key_end = pb.key_end();
+  
+  meta->udp_reliable = pb.udp_reliable();
 #endif
   meta->request = pb.request();
   meta->push = pb.push();

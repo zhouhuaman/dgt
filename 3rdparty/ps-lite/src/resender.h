@@ -88,7 +88,41 @@ class Resender {
 	}
 	 }*/
   }
-
+#ifdef DOUBLE_CHANNEL
+  bool AddIncomming_Push(const Message& msg){
+	   // a message can be received by multiple times
+	//std::cout << "Enter AddIncomming" << std::endl;
+	
+    if (msg.meta.control.cmd == Control::TERMINATE) {
+      return false;
+    } else if (msg.meta.control.cmd == Control::ACK) {
+      mu_.lock();
+      auto key = msg.meta.control.msg_sig;
+	  //std::cout << "key " << key << "have acked" << "at role = " << van_->my_node().role << std::endl;
+      auto it = send_buff_.find(key);
+      if (it != send_buff_.end()) send_buff_.erase(it);
+      mu_.unlock();
+      return true;
+    } else {
+	  mu_.lock();
+	  auto it = push_rcv_buff_.find(msg.meta.sender);
+      if (it == push_rcv_buff_.end()){
+		  std::vector<Push_Entry> tmp_vec;
+		  tmp_vec.resize(msg.meta.key_end-msg.meta.key_begin+1);
+		  push_rcv_buff_.insert(std::make_pair(msg.meta.sender, tmp_vec));
+		  std::cout << "construct push_rcv_buff_" << std::endl;
+		  /* push_rcv_buff_[msg.meta.sender] = std::vector<Push_Entry>;
+		  push_rcv_buff_[msg.meta.sender].resize(msg.meta.key_end-msg.meta.key_begin+1); */
+	  }
+	  std::cout << msg.DebugString() << std::endl;
+	  push_rcv_buff_[msg.meta.sender][msg.meta.first_key].incomming_msg_cnt += 1;
+	  //push_rcv_buff_[msg.meta.sender][msg.meta.first_key].pre_msg = msg;
+	  push_rcv_buff_[msg.meta.sender][msg.meta.first_key].pre_msg_seq += 1;
+	  mu_.unlock();
+	  return false;
+	}
+  }
+#endif
   /**
    * \brief add an incomming message
    * \brief return true if msg has been added before or a ACK message
@@ -127,7 +161,15 @@ class Resender {
       return duplicated;
     }
   }
-
+ #ifdef DOUBLE_CHANNEL
+ struct Push_Entry{
+	int incomming_msg_cnt = 0;
+    int pre_msg_seq = 0;	
+	Message pre_msg;
+ };
+  /*int -> record which sender;Push_Entry ->record the sender's push_msg history status*/
+  std::unordered_map<int, std::vector<Push_Entry>> push_rcv_buff_; //
+ #endif
  private:
   using Time = std::chrono::milliseconds;
   // the buffer entry
@@ -136,6 +178,7 @@ class Resender {
     Time send;
     int num_retry = 0;
   };
+
   std::unordered_map<uint64_t, Entry> send_buff_;
   uint64_t global_key;
   
@@ -206,12 +249,12 @@ class Resender {
 		  
           resend.push_back(it.second.msg);
           ++it.second.num_retry;
-          LOG(WARNING) << van_->my_node().ShortDebugString()
+         /*  LOG(WARNING) << van_->my_node().ShortDebugString()
                        << ": Timeout to get the ACK message. Resend (retry="
-                       << it.second.num_retry << ") " << it.second.msg.DebugString();
+                       << it.second.num_retry << ") " << it.second.msg.DebugString(); */
 		  
-		  if(it.second.msg.data.size() > 0) std::cout<< "data.size = " << it.second.msg.data.size()<<" key=" << (SArray<Key>)it.second.msg.data[0] << "len = " << (SArray<int>)it.second.msg.data[2]<< std::endl;
-          CHECK_LT(it.second.num_retry, max_num_retry_);
+		 // if(it.second.msg.data.size() > 0) std::cout<< "data.size = " << it.second.msg.data.size()<<" key=" << (SArray<Key>)it.second.msg.data[0] << "len = " << (SArray<int>)it.second.msg.data[2]<< std::endl;
+          //CHECK_LT(it.second.num_retry, max_num_retry_);
         }
       }
       mu_.unlock();

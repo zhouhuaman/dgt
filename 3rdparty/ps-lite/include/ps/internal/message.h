@@ -14,6 +14,9 @@
 #define UDP_CHANNEL
 #define DOUBLE_CHANNEL
 #define TCP_MIN_MSG_SIZE 4096*400
+#ifndef MAX_MSG_LIMIT
+#define MAX_MSG_LIMIT 4*1024
+#endif
 namespace ps {
 /** \brief data type */
 enum DataType {
@@ -156,7 +159,7 @@ struct Meta {
   /** \brief default constructor */
 #ifdef UDP_CHANNEL
   Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
-           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),sender(kEmpty), recver(kEmpty),
+           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),key_begin(0),key_end(0), udp_reliable(false),sender(kEmpty), recver(kEmpty),
            request(false), push(false), simple_app(false) {}
 #else
 	 Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
@@ -181,7 +184,9 @@ struct Meta {
 	ss << ", keys_len = " << keys_len;
 	ss << ", vals_len = " << vals_len;
 	ss << ", lens_len = " << lens_len;
-	
+	ss << ", key_begin = " << key_begin;
+	ss << ", key_end = " << key_end;
+	ss << ", udp_reliable" << udp_reliable;
 #endif
     if (!control.empty()) {
       ss << ", control={ " << control.DebugString() << " }";
@@ -218,6 +223,9 @@ struct Meta {
   int vals_len;
   int lens_len;
   //std::vector<int> data_len;
+  int key_begin;
+  int key_end;
+  bool udp_reliable;
 #endif
   /** \brief the node id of the sender of this message */
   int sender;

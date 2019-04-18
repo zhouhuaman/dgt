@@ -65,4 +65,7 @@ message PBMeta {
    optional int32 keys_len = 15;
    optional int32 vals_len = 16;
    optional int32 lens_len = 17;
+   optional int32 key_begin = 18;
+   optional int32 key_end = 19;
+   optional bool udp_reliable = 20;
 }
