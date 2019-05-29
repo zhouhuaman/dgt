@@ -13,6 +13,9 @@
 #define rand_r(x) rand()
 #endif
 
+#ifndef CHANNEL_LOG
+#define CHANNEL_LOG
+#endif
 namespace ps {
 /**
  * \brief be smart on freeing recved data
@@ -50,6 +53,7 @@ class ZMQVan : public Van {
       CHECK(context_ != NULL) << "create 0mq context failed";
       zmq_ctx_set(context_, ZMQ_MAX_SOCKETS, 65536);
     }
+
     start_mu_.unlock();
     // zmq_ctx_set(context_, ZMQ_IO_THREADS, 4);
     Van::Start(customer_id);
@@ -71,86 +75,130 @@ class ZMQVan : public Van {
     senders_.clear();
     zmq_ctx_destroy(context_);
     context_ = nullptr;
+
   }
 #ifdef DOUBLE_CHANNEL
-int Bind_UDP(const Node& node, int max_retry) override {
-	udp_receiver_ = zmq_socket(context_, ZMQ_DISH);
-	CHECK(udp_receiver_ != NULL)
-        << "create udp_receiver socket failed: " << zmq_strerror(errno);
-	int udp_recv_buf_size = 4096*1024;  //4M 
-	int rc = zmq_setsockopt(udp_receiver_, ZMQ_RCVBUF, &udp_recv_buf_size, sizeof(udp_recv_buf_size));
-	assert(rc == 0);
-	int check_rcv_buff = 0;
-	size_t check_len = sizeof(check_rcv_buff);
-	rc = zmq_getsockopt(udp_receiver_, ZMQ_RCVBUF, &check_rcv_buff, &check_len);
-	
-	std::cout << "recv buf size = " << check_rcv_buff << std::endl;
-    int local = GetEnv("DMLC_LOCAL", 0);
-    std::string hostname = node.hostname.empty() ? "*" : node.hostname;
-    int use_kubernetes = GetEnv("DMLC_USE_KUBERNETES", 0);
-    if (use_kubernetes > 0 && node.role == Node::SCHEDULER) {
-      hostname = "0.0.0.0";
+std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
+    std::vector<int> tmp_udp_port;
+    for(int i = 0; i < node.udp_port.size(); ++i){
+        udp_receiver_ = zmq_socket(context_, ZMQ_DISH);
+        CHECK(udp_receiver_ != NULL)
+    << "create udp_receiver[" << i<<" ]socket failed: " << zmq_strerror(errno);
+        int udp_recv_buf_size = 4096*1024;  //4M 
+        int rc = zmq_setsockopt(udp_receiver_, ZMQ_RCVBUF, &udp_recv_buf_size, sizeof(udp_recv_buf_size));
+        assert(rc == 0);
+        int check_rcv_buff = 0;
+        size_t check_len = sizeof(check_rcv_buff);
+        rc = zmq_getsockopt(udp_receiver_, ZMQ_RCVBUF, &check_rcv_buff, &check_len);
+        
+        std::cout << "recv["<< i <<"] buf size = " << check_rcv_buff << std::endl;
+        int local = GetEnv("DMLC_LOCAL", 0);
+        std::string hostname = node.hostname.empty() ? "*" : node.hostname;
+        int use_kubernetes = GetEnv("DMLC_USE_KUBERNETES", 0);
+        if (use_kubernetes > 0 && node.role == Node::SCHEDULER) {
+          hostname = "0.0.0.0";
+        }
+        std::string udp_addr = local ? "ipc:///tmp/" : "udp://" + hostname + ":";
+        
+        int udp_port = node.udp_port[i];
+        unsigned seed = static_cast<unsigned>(time(NULL)+udp_port);
+        for (int i = 0; i < max_retry+1; ++i) {
+          auto address = udp_addr + std::to_string(udp_port);
+          if (zmq_bind(udp_receiver_, address.c_str()) == 0) break;
+          if (i == max_retry) {
+            udp_port = -1;
+          } else {
+            udp_port = 10000 + rand_r(&seed) % 40000;
+          }
+        }
+        rc = zmq_join(udp_receiver_, "GRADIENT");
+        assert(rc == 0);
+        std::cout << "Bind Udp channel["<< i+1 <<"] SUCCESS!!"<< std::endl;
+        udp_receiver_vec.push_back(udp_receiver_);
+        tmp_udp_port.push_back(udp_port);
     }
-	std::string udp_addr = local ? "ipc:///tmp/" : "udp://" + hostname + ":";
-    
-    int udp_port = node.udp_port;
-    unsigned seed = static_cast<unsigned>(time(NULL)+udp_port);
-	for (int i = 0; i < max_retry+1; ++i) {
-      auto address = udp_addr + std::to_string(udp_port);
-      if (zmq_bind(udp_receiver_, address.c_str()) == 0) break;
-      if (i == max_retry) {
-        udp_port = -1;
-      } else {
-        udp_port = 10000 + rand_r(&seed) % 40000;
-      }
-    }
-	rc = zmq_join(udp_receiver_, "GRADIENT");
-	assert(rc == 0);
-    std::cout << "Bind Udp channel SUCCESS!!"<< std::endl;
-    return udp_port;
+    return tmp_udp_port;
 
   }
   
   void Connect_UDP(const Node& node) override {
+
     CHECK_NE(node.id, node.kEmpty);
-    CHECK_NE(node.udp_port, node.kEmpty);
+    //CHECK_NE(node.udp_port, node.kEmpty);
     CHECK(node.hostname.size());
     int id = node.id;
     auto it = udp_senders_.find(id);
     if (it != udp_senders_.end()) {
-      zmq_close(it->second);
+      for(int i = 0; i < it->second.size(); ++i){
+          zmq_close(it->second[i]);
+      }
+      
     }
     // worker doesn't need to connect to the other workers. same for server
     if ((node.role == my_node_.role) && (node.id != my_node_.id)) {
       return;
     }
-	void *udp_sender = zmq_socket(context_, ZMQ_RADIO);
-
-    CHECK(udp_sender != NULL)
-        << zmq_strerror(errno)
-        << ". it often can be solved by \"sudo ulimit -n 65536\""
-        << " or edit /etc/security/limits.conf";
-    if (my_node_.id != Node::kEmpty) {
-      std::string my_id = "ps" + std::to_string(my_node_.id);
-      zmq_setsockopt(udp_sender, ZMQ_IDENTITY, my_id.data(), my_id.size());
+    std::cout << "udp_port.size =" <<  node.udp_port.size() << std::endl;
+    for(int i = 0; i < node.udp_port.size(); ++i){
+        std::cout << node.udp_port[i] << std::endl;
     }
-	int udp_send_buf_size = 4096*1024;  //4M 
-	int rc = zmq_setsockopt(udp_sender, ZMQ_SNDBUF, &udp_send_buf_size, sizeof(udp_send_buf_size));
-	assert(rc == 0);
-	int check_snd_buff = 0;
-	size_t check_len = sizeof(check_snd_buff);
-	rc = zmq_getsockopt(udp_sender, ZMQ_SNDBUF, &check_snd_buff, &check_len);
-	std::cout << "send buf size = " << check_snd_buff << std::endl;
-    // connect
-	std::string addr = "udp://" + node.hostname + ":" + std::to_string(node.udp_port);
-    if (GetEnv("DMLC_LOCAL", 0)) {
-      addr = "ipc:///tmp/" + std::to_string(node.udp_port);
+    for(int i = 0; i < node.udp_port.size(); ++i){
+        void *udp_sender = zmq_socket(context_, ZMQ_RADIO);
+        
+        CHECK(udp_sender != NULL)
+            << zmq_strerror(errno)
+            << ". it often can be solved by \"sudo ulimit -n 65536\""
+            << " or edit /etc/security/limits.conf";
+        if (my_node_.id != Node::kEmpty) {
+          std::string my_id = "ps" + std::to_string(my_node_.id);
+          zmq_setsockopt(udp_sender, ZMQ_IDENTITY, my_id.data(), my_id.size());
+        }
+       
+        int udp_send_buf_size = 4096*1024;  //4M 
+        int rc = zmq_setsockopt(udp_sender, ZMQ_SNDBUF, &udp_send_buf_size, sizeof(udp_send_buf_size));
+        assert(rc == 0);
+        int check_snd_buff = 0;
+        size_t check_len = sizeof(check_snd_buff);
+        rc = zmq_getsockopt(udp_sender, ZMQ_SNDBUF, &check_snd_buff, &check_len);
+        std::cout << "send buf size = " << check_snd_buff << std::endl;
+        
+        // connect
+        std::string addr = "udp://" + node.hostname + ":" + std::to_string(node.udp_port[i]);
+        
+        if (GetEnv("DMLC_LOCAL", 0)) {
+          addr = "ipc:///tmp/" + std::to_string(node.udp_port[i]);
+        }
+        if (zmq_connect(udp_sender, addr.c_str()) != 0) {
+          PS_VLOG(1) <<  "UDP[channel "<< i+1 <<"]:connect to " + addr + " failed: " + zmq_strerror(errno);
+        }else{
+          PS_VLOG(1) <<  "UDP[channel "<< i+1 <<"]:connect to " + addr + " success!!! ";
+        }
+        //udp_senders_[id] = udp_sender;
+        udp_senders_[id].push_back(udp_sender);
+        //write server info to log
+    #ifdef CHANNEL_LOG
+        if(node.role == 0){
+            /* if(i == 0){
+                 std::string file_str = "/tmp/channel"+ std::to_string(my_node_.id)+ ".csv";
+                fp = fopen(file_str.c_str(),"w+");
+                if(!fp){
+                    std::cout << "failed to open"<< file_str << std::endl;
+                }else{
+                    std::cout << "success to open" << file_str << std::endl;
+                }
+            } */
+            fprintf(fp,"%d,%d,%d,%s,%s,%d,%d\n",my_node_.id, node.id, i+1, "udp", node.hostname.c_str(), node.udp_port[i], (i+1)*8);
+            if(i == node.udp_port.size()-1){
+                fflush(fp);
+                fclose(fp);
+            }
+        }
+        //fprintf(fp,"%d,%d,%d,%s,%d,%d\n",my_node_.id, node.id, 1, node.hostname.c_str(), node.udp_port, 1);
+        //fflush(fp);
+    #endif
+        std::cout << "UDP: Connect  to" << node.DebugString()<<" SUCCESS!!" << std::endl;
     }
-    if (zmq_connect(udp_sender, addr.c_str()) != 0) {
-      LOG(FATAL) <<  "UDP:connect to " + addr + " failed: " + zmq_strerror(errno);
-    }
-    udp_senders_[id] = udp_sender;
-	std::cout << "UDP: Connect  to" << node.DebugString()<<" SUCCESS!!" << std::endl;
+	
   }
 #endif
   int Bind(const Node& node, int max_retry) override {
@@ -218,6 +266,19 @@ int Bind_UDP(const Node& node, int max_retry) override {
       LOG(FATAL) <<  "connect to " + addr + " failed: " + zmq_strerror(errno);
     }
     senders_[id] = sender;
+#ifdef CHANNEL_LOG
+    if(node.role ==0){
+        std::string file_str = "/tmp/channel"+ std::to_string(my_node_.id)+ ".csv";
+        fp = fopen(file_str.c_str(),"w+");
+        if(!fp){
+            std::cout << "failed to open"<< file_str << std::endl;
+        }else{
+            std::cout << "success to open" << file_str << std::endl;
+        }
+        fprintf(fp,"%d,%d,%d,%s,%s,%d,%d\n",my_node_.id, node.id,0, "tcp", node.hostname.c_str(), node.port, 0);
+   
+    }
+#endif
 	std::cout << "TCP:Connect  to" << node.DebugString()<<"  SUCCESS!!" << std::endl;
   }
   
@@ -281,7 +342,7 @@ int Bind_UDP(const Node& node, int max_retry) override {
     return send_bytes;
   }
   
-  int SendMsg_UDP(Message& msg, int tag) override {
+  int SendMsg_UDP(int channel, Message& msg, int tag) override {
     std::lock_guard<std::mutex> lk(mu_);
     // find the socket
     int id = msg.meta.recver;
@@ -291,7 +352,7 @@ int Bind_UDP(const Node& node, int max_retry) override {
       LOG(WARNING) << "udp:there is no socket to node " << id;
       return -1;
     }
-    void *socket = it->second;
+    void *socket = it->second[channel];
 	//std::cout << "#160:SendMsg:" << std::endl;
 	int meta_size; char* meta_buf;
 	int n = msg.data.size();
@@ -386,14 +447,14 @@ int SendMsg(Message& msg) override {
 
 /*if DOUBLE_CHANNEL, RecvMSG=> RecvMSG_TCP and RecvMSG_UDP*/
 #ifdef DOUBLE_CHANNEL
-  int RecvMsg_UDP(Message* msg) override {
+  int RecvMsg_UDP(int channel, Message* msg) override {
     msg->data.clear();
     size_t recv_bytes = 0;
     for (int i = 0; ; ++i) {
       zmq_msg_t* zmsg = new zmq_msg_t;
       CHECK(zmq_msg_init(zmsg) == 0) << zmq_strerror(errno);
       while (true) {
-        if (zmq_msg_recv(zmsg, udp_receiver_, 0) != -1) break;
+        if (zmq_msg_recv(zmsg, udp_receiver_vec[channel], 0) != -1) break;
         if (errno == EINTR) {
           std::cout << "interrupted";
           continue;
@@ -602,9 +663,13 @@ int RecvMsg(Message* msg) override {
    */
   std::unordered_map<int, void*> senders_;
 #ifdef DOUBLE_CHANNEL
-  std::unordered_map<int, void*> udp_senders_;
+  std::unordered_map<int, std::vector<void*>> udp_senders_;
+  std::vector<void *> udp_receiver_vec;;
   void *udp_receiver_ = nullptr;
   bool identify_flag = false; //if or not read the identify already
+#endif
+#ifdef CHANNEL_LOG
+  FILE *fp;
 #endif
   std::mutex mu_;
   void *receiver_ = nullptr;

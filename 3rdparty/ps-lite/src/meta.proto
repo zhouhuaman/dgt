@@ -13,7 +13,7 @@ message PBNode {
   optional string hostname = 3;
   // the port this node is binding
   optional int32 port = 4;
-  optional int32 udp_port = 5;
+  repeated int32 udp_port = 5;
   // whether this node is created by failover
   optional bool is_recovery = 6;
   // the locally unique id of an customer
@@ -68,4 +68,5 @@ message PBMeta {
    optional int32 key_begin = 18;
    optional int32 key_end = 19;
    optional bool udp_reliable = 20;
+   optional int32 channel = 21;
 }

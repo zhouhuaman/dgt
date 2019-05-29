@@ -17,6 +17,9 @@
 #ifndef MAX_MSG_LIMIT
 #define MAX_MSG_LIMIT 4*1024
 #endif
+#ifndef EVAL_CONTRIBUTE_CON
+#define EVAL_CONTRIBUTE_CON
+#endif
 namespace ps {
 /** \brief data type */
 enum DataType {
@@ -74,7 +77,7 @@ struct Node {
   static const int kEmpty;
   /** \brief default constructor */
 #ifdef UDP_CHANNEL
-  Node() : id(kEmpty), port(kEmpty), udp_port(kEmpty), is_recovery(false) {}
+  Node() : id(kEmpty), port(kEmpty), is_recovery(false) {}
 #else
   Node() : id(kEmpty), port(kEmpty), is_recovery(false) {}
 #endif
@@ -85,8 +88,10 @@ struct Node {
     std::stringstream ss;
     ss << "role=" << (role == SERVER ? "server" : (role == WORKER ? "worker" : "scheduler"))
        << (id != kEmpty ? ", id=" + std::to_string(id) : "")
-       << ", ip=" << hostname << ", port=" << port << ", udp_port" << udp_port << ", is_recovery=" << is_recovery;
-
+       << ", ip=" << hostname << ", port=" << port <<", is_recovery=" << is_recovery;
+    for(int i = 0; i< udp_port.size(); ++i){
+        ss << "udp[channel "<< i+1 << "] port = " << udp_port[i];
+    }
     return ss.str();
   }
   /** \brief get short debug string */
@@ -107,7 +112,10 @@ struct Node {
   int port;
 #ifdef DOUBLE_CHANNEL
   /** \brief the udp port this node is binding */
-  int udp_port;
+  //int udp_port;
+  //int udp_port_ch2;
+  //int udp_port_ch3;
+  std::vector<int> udp_port;
 #endif
   /** \brief whether this node is created by failover */
   bool is_recovery;
@@ -159,7 +167,7 @@ struct Meta {
   /** \brief default constructor */
 #ifdef UDP_CHANNEL
   Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
-           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),key_begin(0),key_end(0), udp_reliable(false),sender(kEmpty), recver(kEmpty),
+           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),key_begin(0),key_end(0), udp_reliable(false),channel(0),sender(kEmpty), recver(kEmpty),
            request(false), push(false), simple_app(false) {}
 #else
 	 Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
@@ -186,8 +194,11 @@ struct Meta {
 	ss << ", lens_len = " << lens_len;
 	ss << ", key_begin = " << key_begin;
 	ss << ", key_end = " << key_end;
-	ss << ", udp_reliable" << udp_reliable;
+	ss << ", udp_reliable = " << udp_reliable;
+    ss << ", channel = " << channel;
 #endif
+  
+
     if (!control.empty()) {
       ss << ", control={ " << control.DebugString() << " }";
     } else {
@@ -227,6 +238,9 @@ struct Meta {
   int key_end;
   bool udp_reliable;
 #endif
+
+  int channel;
+
   /** \brief the node id of the sender of this message */
   int sender;
   /** \brief the node id of the receiver of this message */
@@ -248,6 +262,10 @@ struct Meta {
  * \brief messages that communicated amaong nodes.
  */
 struct Message {
+#ifdef EVAL_CONTRIBUTE_CON
+  /*\brief contri*/
+  float contri;
+#endif
   /** \brief the meta info of this message */
   Meta meta;
   /** \brief the large chunk of data of this message */

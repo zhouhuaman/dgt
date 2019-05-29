@@ -48,6 +48,9 @@
 #define GRAD_RECOVERY
 #endif
 
+/* #ifndef SERVER_MLR
+#define SERVER_MLR
+#endif */
 /* #ifndef RECV_RANDOM_DROP
 #define RECV_RANDOM_DROP
 #endif */
@@ -377,7 +380,7 @@ class KVStoreDistServer {
       }
 #ifdef GRAD_RECOVERY
       update_buf->update_num += 1;
-	  //CopyFromTo(update_buf->merged / (size_t) ps::NumWorkers(), update_buf->temp_array);
+	  //CopyFromTo(update_buf->merged, update_buf->temp_array);
 	  //update_buf->temp_array.WaitToRead();
 	  if(!update_buf->request.empty() && key == update_buf->request[0].key_end){
 		  // find the last key and check if some key haven't updated
@@ -398,16 +401,16 @@ class KVStoreDistServer {
 					  //tmep_array init to zeros array
 					  SampleUniform(0,0, &tmp_update_buf.temp_array);
 					}
-					int lost_worker_num = (size_t) ps::NumWorkers() - tmp_update_buf.request.size();
-					for(int j = 0; j < lost_worker_num; ++j){
+					//int lost_worker_num = (size_t) ps::NumWorkers() - tmp_update_buf.request.size();
+					//for(int j = 0; j < lost_worker_num; ++j){
 						if(tmp_update_buf.request.size() == 0){
 							CopyFromTo(tmp_update_buf.temp_array, tmp_update_buf.merged);
 							tmp_update_buf.merged.WaitToRead();
-							continue;
+							//continue;
 						}
 						/* tmp_update_buf.merged += tmp_update_buf.temp_array;
 						tmp_update_buf.merged.WaitToRead(); */
-					}
+					//}
 					//std::cout << "key = " << i << "lost_worker_num = " << lost_worker_num << std::endl;
 					//now .merged is complete, can be updated.
 					
@@ -424,8 +427,8 @@ class KVStoreDistServer {
                     }
 					//then temp_array = merge/num_worker
 					
-					/* CopyFromTo(tmp_update_buf.merged / (size_t) ps::NumWorkers(), tmp_update_buf.temp_array);
-					tmp_update_buf.temp_array.WaitToRead(); */
+					//CopyFromTo(tmp_update_buf.merged, tmp_update_buf.temp_array);
+					//tmp_update_buf.temp_array.WaitToRead(); 
 					tmp_update_buf.update_num += 1;
                     for (const auto& req : tmp_update_buf.request) {
                         //printf("response to %d:%d\n",req.sender,req.timestamp);
@@ -868,7 +871,30 @@ class KVStoreDistServer {
 				  }
 				}
 				updates.request.push_back(req_meta);
-				ApplyUpdates(type, key, &updates, server);
+#ifdef SERVER_MLR
+                if(req_meta.first_key == req_meta.key_begin) arrive_rate[req_meta.timestamp] = 0.0;
+                arrive_rate[req_meta.timestamp] = (arrive_rate[req_meta.timestamp] * req_meta.tracker_num + 1)/ (float) req_meta.tracker_num;
+                if(req_meta.first_key != req_meta.key_end){
+                    ApplyUpdates(type, key, &updates, server);
+                    std::cout << "key = "<< req_meta.first_key <<"timestamp = " << req_meta.timestamp << "arrive_rate = " << arrive_rate[req_meta.timestamp] << std::endl;
+                    if(arrive_rate[req_meta.timestamp] > (1 - 0.1)){
+                        std::cout << "tried to update key_end" << std::endl;
+                        ApplyUpdates(type, req_meta.key_end, &update_buf_[req_meta.key_end], server);
+                    }
+                }else{
+                    std::cout << "key_end = "<< req_meta.first_key <<"timestamp = " << req_meta.timestamp << "arrive_rate = " << arrive_rate[req_meta.timestamp] << std::endl;
+                    if(arrive_rate[req_meta.timestamp] > (1 - 0.1)){
+                        std::cout << "get key_end, and arrive_rate satisfied" << std::endl;
+                        ApplyUpdates(type, key, &updates, server);
+                    }else{
+                        std::cout << "get key_end,but arrive_rate not satisfied" << std::endl;
+                    }
+                }
+#else
+                ApplyUpdates(type, key, &updates, server);
+#endif    
+                
+				
 				
 			  }
 			}
@@ -974,7 +1000,9 @@ class KVStoreDistServer {
    * to this value when values from all workers are pushed into this buffer.
    */
   std::unordered_map<int, UpdateBuf> update_buf_;
-
+#ifdef SERVER_MLR
+    std::unordered_map<int,float> arrive_rate;
+#endif
   /**
    * \brief decomp_buf_ is a buffer into which compressed values are
    * decompressed before merging to the store. used when compress_!='none'

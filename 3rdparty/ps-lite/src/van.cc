@@ -57,7 +57,7 @@ void Van::ProcessAddNodeCommandAtScheduler(
         node.id = id;
 #ifdef DOUBLE_CHANNEL
 		Connect(node);
-		Connect_UDP(node);
+		//Connect_UDP(node);
 #else  
         Connect(node);
 #endif
@@ -245,7 +245,8 @@ void Van::ProcessAddNodeCommand(Message* msg, Meta* nodes, Meta* recovery_nodes)
       if (connected_nodes_.find(addr_str) == connected_nodes_.end()) {
 #ifdef DOUBLE_CHANNEL
 	   Connect(node);
-	   Connect_UDP(node);
+       if(node.role != Node::Role::SCHEDULER)
+            Connect_UDP(node);
 #else
         Connect(node);
 #endif
@@ -262,12 +263,14 @@ void Van::ProcessAddNodeCommand(Message* msg, Meta* nodes, Meta* recovery_nodes)
 void Van::Start(int customer_id) {
   // get scheduler info
   start_mu_.lock();
-
+#ifdef DOUBLE_CHANNEL
+   int udp_ch_num = 0;
+#endif
   if (init_stage == 0) {
     scheduler_.hostname = std::string(CHECK_NOTNULL(Environment::Get()->find("DMLC_PS_ROOT_URI")));
     scheduler_.port = atoi(CHECK_NOTNULL(Environment::Get()->find("DMLC_PS_ROOT_PORT")));
 #ifdef DOUBLE_CHANNEL
-    scheduler_.udp_port = atoi(CHECK_NOTNULL(Environment::Get()->find("DMLC_PS_ROOT_UDP_PORT")));
+    //scheduler_.udp_port = atoi(CHECK_NOTNULL(Environment::Get()->find("DMLC_PS_ROOT_UDP_PORT")));
 #endif
     scheduler_.role = Node::SCHEDULER;
     scheduler_.id = kScheduler;
@@ -294,9 +297,7 @@ void Van::Start(int customer_id) {
         CHECK(!interface.empty()) << "failed to get the interface";
       }
       int port = GetAvailablePort();
-#ifdef DOUBLE_CHANNEL
-	  int udp_port = GetAvailablePort();
-#endif
+
       const char *pstr = Environment::Get()->find("PORT");
       if (pstr) port = atoi(pstr);
       CHECK(!ip.empty()) << "failed to get ip";
@@ -305,7 +306,16 @@ void Van::Start(int customer_id) {
       my_node_.role = role;
       my_node_.port = port;
 #ifdef DOUBLE_CHANNEL
-	  my_node_.udp_port = udp_port;
+      
+      if(!is_scheduler_){
+         udp_ch_num = atoi(CHECK_NOTNULL(Environment::Get()->find("DMLC_UDP_CHANNEL_NUM")));
+         std::cout << "udp_ch_num = " << udp_ch_num << std::endl;
+          for(int i = 0; i < udp_ch_num; ++i){
+              int p = GetAvailablePort();
+              my_node_.udp_port.push_back(p);
+            }  
+
+      }
 #endif
       // cannot determine my id now, the scheduler will assign it later
       // set it explicitly to make re-register within a same process possible
@@ -315,38 +325,47 @@ void Van::Start(int customer_id) {
 
     // bind.
     my_node_.port = Bind(my_node_, is_scheduler_ ? 0 : 40);
+    std::cout << "DEBUG: #323" << std::endl;
     PS_VLOG(1) << "Bind to " << my_node_.DebugString();
     CHECK_NE(my_node_.port, -1) << "TCP:bind failed";
 	
 #ifdef DOUBLE_CHANNEL
-	my_node_.udp_port = Bind_UDP(my_node_, is_scheduler_ ? 0 : 40);
-    PS_VLOG(1) << "Bind to " << my_node_.DebugString();
-    CHECK_NE(my_node_.port, -1) << "UDP:bind failed";
+    if(!is_scheduler_){
+        my_node_.udp_port = Bind_UDP(my_node_, is_scheduler_ ? 0 : 40);
+        PS_VLOG(1) << "(UDP)Bind to " << my_node_.DebugString();
+    }
+   // CHECK_NE(my_node_.port, -1) << "UDP:bind failed";
 #endif
     // connect to the scheduler
     Connect(scheduler_);
 #ifdef DOUBLE_CHANNEL
-	Connect_UDP(scheduler_);
+    /* if(!is_scheduler)
+        Connect_UDP(scheduler_); */
 #endif
     // for debug use
     if (Environment::Get()->find("PS_DROP_MSG")) {
       drop_rate_ = atoi(Environment::Get()->find("PS_DROP_MSG"));
     }
-	std::cout << "#325 at "<< my_node_.DebugString() << std::endl;
+	//std::cout << "#325 at "<< my_node_.DebugString() << std::endl;
 #ifdef DOUBLE_CHANNEL
    // start tcp receiver
     tcp_receiver_thread_ = std::unique_ptr<std::thread>(
             new std::thread(&Van::Receiving_TCP, this));
-	// start udp receiver
-    udp_receiver_thread_ = std::unique_ptr<std::thread>(
-            new std::thread(&Van::Receiving_UDP, this));
+    if(!is_scheduler_){
+        // start udp receiver
+        for(int i = 0; i < my_node_.udp_port.size(); ++i){
+            udp_receiver_thread_[i] = std::unique_ptr<std::thread>(
+              new std::thread(&Van::Receiving_UDP,this,i));
+           // udp_receiver_thread_vec.push_back(udp_receiver_thread_);
+        }
+    }
 #else
 	
     // start receiver
     receiver_thread_ = std::unique_ptr<std::thread>(
             new std::thread(&Van::Receiving, this));
 #endif
-	std::cout << "#334 at "<< my_node_.DebugString() << std::endl;
+	//std::cout << "#334 at "<< my_node_.DebugString() << std::endl;
     init_stage++;
   }
   start_mu_.unlock();
@@ -375,6 +394,10 @@ void Van::Start(int customer_id) {
       int timeout = 100;
 	  std::cout << my_node_.role << ":" << "start resender_" << std::endl;
       resender_ = new Resender(timeout, 10, this);
+#ifdef CHANNEL_MLR
+      std::vector<float> mlr(udp_ch_num,0.5);          
+      resender_->init_channel_info(udp_ch_num, mlr);
+#endif
 #else
     if (Environment::Get()->find("PS_RESEND") && atoi(Environment::Get()->find("PS_RESEND")) != 0) {
       int timeout = 1000;
@@ -411,7 +434,9 @@ void Van::Stop() {
   CHECK_NE(ret, -1);
 #ifdef DOUBLE_CHANNEL
 	tcp_receiver_thread_->join();
-	udp_receiver_thread_->join();
+    for(int i = 0; i < udp_receiver_thread_vec.size(); ++i){
+        udp_receiver_thread_[i]->join();
+    }
 #else
   receiver_thread_->join();
 #endif
@@ -429,14 +454,27 @@ void Van::Stop() {
 #ifdef DOUBLE_CHANNEL
 int Van::Send( Message& msg, int channel, int tag) {
 	int send_bytes = 0;
+    
+
   if(channel == 0){
 	  send_bytes = SendMsg_TCP(msg, tag);
   }else{
-	  send_bytes = SendMsg_UDP(msg, tag);
+#ifdef CHANNEL_MLR   
+    if(msg.meta.push){
+         for(int c = 0; c < resender_-> get_channel_num(); ++c){
+            //std::cout << "lr[ "<< c << "] = " << resender_-> get_realtime_lr(c) << std::endl; 
+            resender_-> get_realtime_lr(c);
+        }
+    }   
+#endif 
+	  send_bytes = SendMsg_UDP(channel-1, msg, tag);
+      
 	  if(msg.meta.udp_reliable){
 		  if (resender_) {
 		  //std::cout << "Van::Send, record outgoing msg" << std::endl;
+          
 		  resender_->AddOutgoing(msg);
+
 		}
 	  }
 	  /* static uint64_t udp_snd_msg_cnt = 0;
@@ -456,6 +494,13 @@ int Van::Send( Message& msg, int channel, int tag) {
   }
   return send_bytes;
 }
+#ifdef CHANNEL_MLR
+void Van::Update_Sendbuff( int timestamp) {
+    if (resender_){
+		  resender_->Update_Sendbuff(timestamp);
+		}
+}
+#endif
 #else
 int Van::Send( Message& msg) {
   static unsigned int count = 0;
@@ -507,6 +552,11 @@ void Van::Receiving_TCP() {
 	/* if(msg.meta.push && msg.meta.request){
 		if (resender_ && resender_->AddIncomming_Push(msg)) continue;
 	} */
+
+    if(msg.meta.control.cmd == Control::ACK){
+		if (resender_ && resender_->AddIncomming(msg)) continue;
+	}
+
 	if (!msg.meta.control.empty()) {
       // control msg
       auto& ctrl = msg.meta.control;
@@ -556,14 +606,14 @@ void Van::Receiving_TCP() {
   }
 }
 
-void Van::Receiving_UDP() {
+void Van::Receiving_UDP(int channel) {
   Meta nodes;
   Meta recovery_nodes;  // store recovery nodes
   recovery_nodes.control.cmd = Control::ADD_NODE;
-
+  PS_VLOG(1) << "Start thread{Receiving_UDP} in UDP channel [" << channel+1 << "]";
   while (true) {
     Message msg;
-    int recv_bytes = RecvMsg_UDP(&msg);
+    int recv_bytes = RecvMsg_UDP(channel, &msg);
 	
     // For debug, drop received message
     if (ready_.load() && drop_rate_ > 0) {
@@ -587,6 +637,7 @@ void Van::Receiving_UDP() {
 		  udp_rcv_msg_cnt = 0;
 	  } */
     // duplicated message
+    //LOG(WARNING) << msg.DebugString();
 	if(msg.meta.control.cmd == Control::ACK || msg.meta.udp_reliable){
 		if (resender_ && resender_->AddIncomming(msg)) continue;
 	}
@@ -686,6 +737,8 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   pb.set_key_begin(meta.key_begin);
   pb.set_key_end(meta.key_end);
   pb.set_udp_reliable(meta.udp_reliable);
+  pb.set_channel(meta.channel);
+  
 #endif
   pb.set_push(meta.push);
   pb.set_request(meta.request);
@@ -706,7 +759,9 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
       p->set_role(n.role);
       p->set_port(n.port);
 #ifdef DOUBLE_CHANNEL
-	  p->set_udp_port(n.udp_port);
+      for(auto up : n.udp_port){
+          p->add_udp_port(up);
+      }
 #endif
       p->set_hostname(n.hostname);
       p->set_is_recovery(n.is_recovery);
@@ -745,6 +800,7 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
   meta->key_end = pb.key_end();
   
   meta->udp_reliable = pb.udp_reliable();
+  meta->channel = pb.channel();
 #endif
   meta->request = pb.request();
   meta->push = pb.push();
@@ -766,7 +822,9 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
       n.role = static_cast<Node::Role>(p.role());
       n.port = p.port();
 #ifdef DOUBLE_CHANNEL
-	  n.udp_port = p.udp_port();
+      for(int i = 0; i < p.udp_port_size();++i){
+          n.udp_port.push_back(p.udp_port(i));
+      }
 #endif
       n.hostname = p.hostname();
       n.id = p.has_id() ? p.id() : Node::kEmpty;

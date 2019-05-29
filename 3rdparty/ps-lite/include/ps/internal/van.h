@@ -56,6 +56,9 @@ class Van {
 #ifdef DOUBLE_CHANNEL
     /*channel = 0 means tcp channel 1->udp channel tag = 0 means send imediately.*/
 	int Send(Message &msg, int channel = 0, int tag = 0);
+#ifdef CHANNEL_MLR
+    void Update_Sendbuff( int timestamp);
+#endif
 #else
     int Send(Message &msg);
 #endif
@@ -99,12 +102,12 @@ class Van {
      */
     virtual int Bind(const Node &node, int max_retry) = 0;
 #ifdef DOUBLE_CHANNEL
-	 virtual int Bind_UDP(const Node &node, int max_retry) = 0;
+	 virtual std::vector<int> Bind_UDP(const Node &node, int max_retry) = 0;
 #endif
 
 #ifdef DOUBLE_CHANNEL
 	virtual int RecvMsg_TCP(Message *msg) = 0;
-	virtual int RecvMsg_UDP(Message *msg) = 0;
+	virtual int RecvMsg_UDP(int channel, Message *msg) = 0;
 #else
     /**
      * \brief block until received a message
@@ -114,7 +117,7 @@ class Van {
 #endif
   
 #ifdef DOUBLE_CHANNEL
-    virtual int SendMsg_UDP(Message &msg, int tag = 0) = 0;
+    virtual int SendMsg_UDP(int channel, Message &msg, int tag = 0) = 0;
 	virtual int SendMsg_TCP(Message &msg, int tag = 0) = 0;
 #else
 	 /**
@@ -143,7 +146,7 @@ class Van {
 	/*if DOUBLE_CHANNEL, Receiving=> Receiving_TCP and  Receiving_UDP*/
 #ifdef DOUBLE_CHANNEL
 	void Receiving_TCP();
-	void Receiving_UDP();
+	void Receiving_UDP(int channel);
 #else
     void Receiving();
 #endif
@@ -170,7 +173,9 @@ class Van {
     std::unique_ptr<std::thread> tcp_receiver_thread_;
 	
 	/** the thread for receiving udp messages */
-    std::unique_ptr<std::thread> udp_receiver_thread_;
+   
+    std::unique_ptr<std::thread> udp_receiver_thread_[8];
+    std::vector<std::unique_ptr<std::thread>> udp_receiver_thread_vec;
 #else
     /** the thread for receiving messages */
     std::unique_ptr<std::thread> receiver_thread_;

@@ -36,8 +36,16 @@
 #ifndef SEND_RANDOM_DROP
 #define SEND_RANDOM_DROP
 #endif
-namespace ps {
 
+/* #ifndef CHANNEL_MLR
+#define CHANNEL_MLR
+#endif */
+
+
+namespace ps {
+/* #ifdef EVAL_CONTRIBUTE_CON
+    bool my_GreaterSort(Message msg1, Message msg2){return (msg1.contri > msg2.contri);}
+#endif */
 /**
  * \brief the structure for a list of key-value pairs
  *
@@ -277,6 +285,8 @@ class KVWorker : public SimpleApp {
    * \param timestamp the timestamp of the callback
    */
   void RunCallback(int timestamp);
+
+ 
   /**
    * \brief send the kv list to all servers
    * @param timestamp the timestamp of the request
@@ -293,7 +303,11 @@ class KVWorker : public SimpleApp {
 
   /** \brief data buffer for received kvs for each timestamp */
   std::unordered_map<int, std::vector<KVPairs<Val>>> recv_kvs_;
-#ifdef EVAL_CONTRIBUTE_N
+#ifdef EVAL_CONTRIBUTE_CON
+  void Open_loss_file();
+  void Update_loss_delta();
+  float Evaluate_msg_contri(KVPairs<char>& kv, Message& msg);
+  int Get_channel(int index, int max_index, int C, float k);
   int64_t push_op_num = 0;
   std::unordered_map<int, float> pre_max_N;
   float max_N = 0.0;
@@ -304,6 +318,7 @@ class KVWorker : public SimpleApp {
   
   std::unordered_map<int, float> p_loss;
   std::unordered_map<int, float> contri;
+  std::vector<Message> msg_vector;
   float pre_loss = 0;
   float delta_l = 0.0;
 #endif
@@ -593,7 +608,117 @@ void KVWorker<Val>::DefaultSlicer(
   }
 //#endif
 }
-
+#ifdef EVAL_CONTRIBUTE_CON
+template <typename Val>
+void KVWorker<Val>::Open_loss_file() {
+    std::string file_str = "/tmp/loss"+ std::to_string(Postoffice::Get()->van()->my_node().id)+ ".csv";
+    std::cout << "file_str = " << file_str << std::endl;
+    fp = fopen(file_str.c_str(),"r");
+    if(!fp){
+        std::cout << "failed to open csv file" << std::endl;
+    }else{
+        std::cout << "open loss csv success" << std::endl;
+    }
+}
+template <typename Val>
+void KVWorker<Val>::Update_loss_delta() {
+    char line[10];
+    float cur_loss = 0.0;
+    if(fgets(line, 10, fp) != NULL){
+        cur_loss = atof(line);
+        //std::cout << "loss = " << cur_loss << std::endl;
+        fseek(fp,0,0);
+    }
+    std::cout << "cur_loss = " << cur_loss << std::endl;
+    if(pre_loss != 0){
+        delta_l = pre_loss - cur_loss;
+    }else{
+        delta_l = 1;
+    }
+    //std::cout << "delta_l = " << delta_l << std::endl;
+    pre_loss = cur_loss;
+}
+template <typename Val>
+float KVWorker<Val>::Evaluate_msg_contri(KVPairs<char>& kv, Message& msg) {
+    /*calculate p_N of a msg*/
+    float *pd = (float*)kv.vals.data();
+    int nlen = kv.lens[0] / sizeof(float);
+    float N = 0;
+    if(msg.meta.first_key == msg.meta.key_begin){
+        max_N = 0.0;
+    }
+    for(int i = 0; i < nlen; i++){
+        N += fabs(*(pd+i));
+    } 
+    max_N = std::max(max_N, N);
+    if(push_op_num == 2){
+        pre_max_N[msg.meta.key_begin] = max_N;
+    }
+    if(pre_max_N[msg.meta.key_begin] == 0){
+        p_N = 0;
+    }else{
+        p_N = N / pre_max_N[msg.meta.key_begin];
+    }
+    if(msg.meta.first_key == msg.meta.key_end){
+        pre_max_N[msg.meta.key_begin] = max_N;
+    }
+    /*******************************************************/
+    /*calculate contri of a msg*/
+    float a = 0.3;
+    float b = 0.3;
+    float c = 0.4;
+    if(push_op_num == 2){
+       contri[msg.meta.first_key] = c * p_N;
+    }else{
+       if(p_N == 0){
+           contri[msg.meta.first_key] = 0;
+       }else{
+           if(delta_l > 0 || delta_l == 0){
+               contri[msg.meta.first_key] = a * contri[msg.meta.first_key] + b * (1 - p_loss[msg.meta.first_key]) + c * p_N;
+           }else{
+               contri[msg.meta.first_key] = a * contri[msg.meta.first_key] - b * (1 - p_loss[msg.meta.first_key]) + c * p_N;
+           }
+       }
+    }
+    if(msg.meta.first_key == msg.meta.key_begin){
+          max_contri = 0.0;
+    }
+    max_contri = std::max(max_contri, contri[msg.meta.first_key]);
+    if(push_op_num == 2){
+        pre_max_contri[msg.meta.key_begin] = max_contri;
+    }
+    if(pre_max_contri[msg.meta.key_begin] == 0){
+        p_loss[msg.meta.first_key] = 0;
+    }else{
+        p_loss[msg.meta.first_key] = 1 - contri[msg.meta.first_key] / pre_max_contri[msg.meta.key_begin];
+        if(p_loss[msg.meta.first_key] < 0)  p_loss[msg.meta.first_key] = 0;
+    }
+    if(msg.meta.first_key == msg.meta.key_end){
+        pre_max_contri[msg.meta.key_begin] = max_contri;
+    }
+    // std::cout << "p_loss[" << msg.meta.first_key << "] = " << p_loss[msg.meta.first_key] << std::endl;
+    return contri[msg.meta.first_key];
+}
+template <typename Val>
+int KVWorker<Val>::Get_channel(int index, int max_index, int C, float k) {
+    int min_index = std::round(k*(max_index+1));
+    if(index < min_index){
+        return 0;
+    }
+    for(int i = 0; i < C; ++i){
+        if(max_index - min_index > 0){
+            if(index >= min_index + (float)i * (max_index-min_index)/C && index < min_index + (float)(i+1) * (max_index-min_index)/C){
+                //std::cout << "index = " << index <<" min_index = " << min_index << "max_index = " << max_index <<"i = " << i << std::endl;
+                return i+1;
+            }
+        }else{
+            return i+1;
+        }
+        
+    }  
+   
+}
+#endif
 template <typename Val>
 void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& kvs) {
   // slice the message
@@ -679,43 +804,10 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 			std::cout << "msg_cnt = " << j+1 << "run_time = " <<  (double)(end_time - start_time)/CLOCKS_PER_SEC << " s" << std::endl; 
 		} */
 		//usleep(1);
-		struct timespec req;
-		req.tv_sec = 0;
-		req.tv_nsec = 10;
-		nanosleep(&req,NULL);
-		/* if(msg.meta.push){ //part of push msg use tcp channel
-			if(msg.meta.first_key % 2 == 0){
-				if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
-					tcp_tag = ZMQ_SNDMORE;
-				}
-				send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
-				if(tcp_tag == ZMQ_SNDMORE){
-					send_bytes = 0;
-					tcp_tag = 0;
-				}
-			}else{
-				Postoffice::Get()->van()->Send(msg,1,udp_tag);
-			}
-		}else{ //all pull msg use tcp channel
-			if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
-				tcp_tag = ZMQ_SNDMORE;
-			}
-			send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
-			if(tcp_tag == ZMQ_SNDMORE){
-				send_bytes = 0;
-				tcp_tag = 0;
-			}
-		} */
-		/* if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
-				tcp_tag = 0;
-			}
-			send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
-			if(tcp_tag == 0){
-				send_bytes = 0;
-				tcp_tag = ZMQ_SNDMORE;
-		 } */
-		//Postoffice::Get()->van()->Send(msg,0,tcp_tag);
+		
+#ifdef EVAL_CONTRIBUTE_CON
         if(msg.meta.push){
+            /*analize push sequence*/
             if(j == 0){
                 auto it = is_first_push_.find(msg.meta.first_key);
                 if(it == is_first_push_.end()){
@@ -726,153 +818,71 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                     is_first_push_op = false;
                 }
             }
-#ifdef EVAL_CONTRIBUTE_N
             if(msg.meta.first_key == 0){
                 push_op_num ++;
             }
-            if(!is_first_push_op){
-              float *pd = (float*)tmp_kv.vals.data();
-              int nlen = tmp_kv.lens[0] / sizeof(float);
-              float N = 0;
-              if(msg.meta.first_key == msg.meta.key_begin){
-                  max_N = 0.0;
-              }
-              //std::cout << std::endl << "[";
-              for(int i = 0; i < nlen; i++){
-                  //std::cout << " " << *(pd+i);
-                  N += fabs(*(pd+i));
-                  //if(i % 100 == 0) std::cout << std::endl;
-              }
-             // std::cout << "]" << std::endl;
-          
-              max_N = std::max(max_N, N);
-              //auto it = pre_max_N.find(msg.meta.key_begin);
-              if(push_op_num == 2){
-                  pre_max_N[msg.meta.key_begin] = max_N;
-              }
-              //std::cout << "key = " << msg.meta.first_key << "N = " << N << "pre_max_N = " <<  pre_max_N[msg.meta.key_begin] << std::endl;
-              if(pre_max_N[msg.meta.key_begin] == 0){
-                  p_N = 0;
-              }else{
-                  p_N = N / pre_max_N[msg.meta.key_begin];
-              }
-              if(msg.meta.first_key == msg.meta.key_end){
-                  pre_max_N[msg.meta.key_begin] = max_N;
-              }
-              //std::cout << "key = " << msg.meta.first_key << ", p_N = " << p_N << std::endl;
+            /**************************************************/
+            /*defferent process msg according to the msg is first pushed or not*/
+            if(is_first_push_op){
+                if(msg.meta.first_key == 0){  //open the loss file
+                    Open_loss_file();
+                }
+                msg_vector.push_back(msg); // do nothing for msg
+                
+            }else{
+                if(msg.meta.first_key == 0){  //update loss delta
+                    Update_loss_delta();
+                }
+                msg.contri = Evaluate_msg_contri(tmp_kv, msg);
+                msg_vector.push_back(msg);
             }
-#endif
-#ifdef EVAL_CONTRIBUTE_LOSS
-            if(is_first_push_op && msg.meta.first_key == 0){
-                std::string file_str = "/tmp/loss"+ std::to_string(Postoffice::Get()->van()->my_node().id)+ ".csv";
-                std::cout << "file_str = " << file_str << std::endl;
-                fp = fopen(file_str.c_str(),"r");
-                if(!fp){
-                    std::cout << "failed to open csv file" << std::endl;
-                }else{
-                    std::cout << "open loss csv success" << std::endl;
-                }
-         
-            }
-            if(!is_first_push_op && msg.meta.first_key == 0){
-                char line[10];
-                float cur_loss = 0.0;
-                if(fgets(line, 10, fp) != NULL){
-                    cur_loss = atof(line);
-                    //std::cout << "loss = " << cur_loss << std::endl;
-                    fseek(fp,0,0);
-                }
-                std::cout << "cur_loss = " << cur_loss << std::endl;
-                if(pre_loss != 0){
-                    delta_l = pre_loss - cur_loss;
-                }else{
-                    delta_l = 1;
-                }
-                //std::cout << "delta_l = " << delta_l << std::endl;
-                pre_loss = cur_loss;
-            }
-#endif
-#ifdef EVAL_CONTRIBUTE_CON
-            if(!is_first_push_op){
-                //auto it = p_loss.find(msg.meta.first_key);
-                float a = 0.3;
-                float b = 0.3;
-                float c = 0.4;
-                if(push_op_num == 2){
-                   
-                   contri[msg.meta.first_key] = c * p_N;
-                   
-                }else{
-                   //std::cout << "########################" << std::endl;
-                   //std::cout << "contri =  " << contri[msg.meta.first_key] << "delta_l = " << delta_l << "p_N = " << p_N << std::endl;
-                   if(p_N == 0){
-                       contri[msg.meta.first_key] = 0;
-                   }else{
-                       if(delta_l > 0 || delta_l == 0){
-                           contri[msg.meta.first_key] = a * contri[msg.meta.first_key] + b * (1 - p_loss[msg.meta.first_key]) + c * p_N;
-                       }else{
-                           contri[msg.meta.first_key] = a * contri[msg.meta.first_key] - b * (1 - p_loss[msg.meta.first_key]) + c * p_N;
-                       }
-                       
-
-                   }
-                }
-                if(msg.meta.first_key == msg.meta.key_begin){
-                      max_contri = 0.0;
-                }
-                max_contri = std::max(max_contri, contri[msg.meta.first_key]);
-               
-                 // it = pre_max_contri.find(msg.meta.key_begin);
-                  if(push_op_num == 2){
-                      pre_max_contri[msg.meta.key_begin] = max_contri;
-                  }
-                 // std::cout << "contri[" << msg.meta.first_key << "] = " <<  contri[msg.meta.first_key] << std::endl;
-                  //do st
-                  if(pre_max_contri[msg.meta.key_begin] == 0){
-                      p_loss[msg.meta.first_key] = 0.5;
-                  }else{
-                      p_loss[msg.meta.first_key] = 0.5 * (1 - contri[msg.meta.first_key] / pre_max_contri[msg.meta.key_begin]);
-                      if(p_loss[msg.meta.first_key] < 0)  p_loss[msg.meta.first_key] = 0;
-                  }
-                  if(msg.meta.first_key == msg.meta.key_end){
-                      pre_max_contri[msg.meta.key_begin] = max_contri;
-                  }
-                // std::cout << "p_loss[" << msg.meta.first_key << "] = " << p_loss[msg.meta.first_key] << std::endl;
-            }
-        
-#endif
+            
+        }else{
+            msg_vector.push_back(msg); // do nothing for msg
         }
-		
-#ifdef SEND_RANDOM_DROP  //drop send msg according some probability of 10%
+	}
+    if(msg_vector[0].meta.push && !is_first_push_op){
+        std::sort(msg_vector.begin(),msg_vector.end()-1,[](const Message& msg1, const Message& msg2){
+            return msg1.contri > msg2.contri;
+        });
+        //std::cout << "msg_vector.size = " << msg_vector.size() << std::endl;
+        for(size_t j = 0; j < msg_vector.size(); ++j){
+            
+            int ch = Get_channel(j, msg_vector.size()-1, 2, 0.1);
+            if(j == msg_vector.size()-1){
+                //std::cout << "a layer is ended:" << "key = " << msg_vector[j].meta.first_key << ",end_key = " << msg_vector[j].meta.key_end << std::endl;
+                assert(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end);
+                msg_vector[j].meta.udp_reliable = true;
+            }
+            //std::cout <<"key = " << msg_vector[j].meta.first_key <<" ,congtri = "<< msg_vector[j].contri << ",ch = " << ch << std::endl;
+            Postoffice::Get()->van()->Send(msg_vector[j],ch,0); 
+            
+            struct timespec req;
+            req.tv_sec = 0;
+            req.tv_nsec = 10;
+            nanosleep(&req,NULL);
+        }
+        msg_vector.clear();
+    }else{
+        for(size_t j = 0; j < msg_vector.size(); ++j){
+            Postoffice::Get()->van()->Send(msg_vector[j],0,0); 
+        }
+        msg_vector.clear();
+    }
+#endif
+        
+/* #ifdef SEND_RANDOM_DROP  //drop send msg according some probability of 10%
         if(msg.meta.push){
 			if(!is_first_push_op){
                 srand((unsigned)time(NULL));
                 int rn = rand()%100;
-                if(rn < p_loss[msg.meta.first_key]*100 && msg.meta.first_key != msg.meta.key_end){
+                if(rn < 5 p_loss[msg.meta.first_key]*100 && msg.meta.first_key != msg.meta.key_end){
                     continue;
                 }
             }
         }
-#endif
-		if(msg.meta.push){
-			if(is_first_push_op){
-				Postoffice::Get()->van()->Send(msg,0,0); // first push is important
-				
-			}else{
-				if(j == n-1){
-					msg.meta.udp_reliable = true;
-					//Postoffice::Get()->van()->Send(msg,1,udp_tag);  //the last key msg transformed by udp channel, but is reliable
-					Postoffice::Get()->van()->Send(msg,0,0);
-				}else{
-					//msg.meta.udp_reliable = true;
-					//Postoffice::Get()->van()->Send(msg,1,udp_tag);
-					Postoffice::Get()->van()->Send(msg,0,0);  
-				}
-			}
-		}else{
-			Postoffice::Get()->van()->Send(msg,0,0);
-		}
-	}
+#endif */
+
 #else
     Message msg;
     msg.meta.app_id = obj_->app_id();
@@ -918,23 +928,7 @@ void KVWorker<Val>::Process(const Message& msg) {
   if (!msg.meta.push && msg.data.size()) {
     CHECK_GE(msg.data.size(), (size_t)2);
     KVPairs<Val> kvs;
-	/* if(msg.data.size() > 0){
-		  if(((SArray<Key>)msg.data[0])[0] > 100000){
-				std::cout << "KVWorker->Process#678:find error key" << (SArray<Key>)msg.data[0] << msg.meta.DebugString() << std::endl;
-		   }
-		   KVPairs<Val> test_kvs;
-		   test_kvs.keys = msg.data[0];
-		   if(test_kvs.keys[0] > 100000){
-		   
-		   std::cout << "KVWorker->Process#683:test_kvs:" << test_kvs.keys << msg.meta.DebugString() << std::endl;
-		   std::cout << "KVWorker->Process#683:msg.data[0][0] = " << (SArray<Key>)msg.data[0] << std::endl;
-	}
-		  
-	  } */
     kvs.keys = msg.data[0];
-	/* if(kvs.keys[0] > 100000){
-		std::cout << "find error key" << kvs.keys << msg.meta.DebugString() << std::endl;
-	} */
     kvs.vals = msg.data[1];
     if (msg.data.size() > (size_t)2) {
       kvs.lens = msg.data[2];
@@ -947,11 +941,9 @@ void KVWorker<Val>::Process(const Message& msg) {
   // finished, run callbacks
 #ifdef LITTLE_GRAIN_MSG
 	//std::cout << obj_->NumResponse(ts) << "---" << msg.meta.tracker_num << std::endl;
-	if(msg.meta.push){
+	if(msg.meta.push && !is_first_push_op){
 		if (msg.meta.first_key == msg.meta.key_end)  {
-		//if (obj_->NumResponse(ts) == msg.meta.tracker_num-1)  {
-		//std::cout << msg.DebugString() << std::endl;
-		//std::cout << "Get the key_end = " << msg.meta.first_key << "Now, obj_->NumResponse(" << ts << ")=" << obj_->NumResponse(ts) << std::endl;
+        //if (obj_->NumResponse(ts) == msg.meta.tracker_num-1)  {
         static unsigned int tot_response = 0;
         static unsigned int tot_tracker = 0;
         tot_response += obj_->NumResponse(ts)+1;
@@ -960,15 +952,13 @@ void KVWorker<Val>::Process(const Message& msg) {
         //outFile.open("/home/homan/mxnet_test_src/resnet_mnist/flow_loss.csv", std::ios::app); // 打开模式可省略
         /* outFile << ts << "," << 1-((float)tot_response/ tot_tracker )<< std::endl;
         outFile.close(); */
-        
-        
-        std::cout << ts << "," << 1-((float)tot_response/ tot_tracker )<< std::endl;
+
+        std::cout << ts << "," << 1- ((float)(obj_->NumResponse(ts)+1)/msg.meta.tracker_num) << "," <<1-((float)tot_response/ tot_tracker )<< std::endl;
         //}
 		RunCallback(ts);
 		}
 	}else{
-		if (obj_->NumResponse(ts) == msg.meta.tracker_num-1/*  || (msg.meta.push && msg.meta.first_key == msg.meta.key_end) */)  {
-		//std::cout << "#635:Prepare to call RunCallback" << std::endl;
+		if (obj_->NumResponse(ts) == msg.meta.tracker_num-1)  {
 		RunCallback(ts);
 		}
 	}
