@@ -265,6 +265,7 @@ struct Message {
 #ifdef EVAL_CONTRIBUTE_CON
   /*\brief contri*/
   float contri;
+  float p_loss;
 #endif
   /** \brief the meta info of this message */
   Meta meta;

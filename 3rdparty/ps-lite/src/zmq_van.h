@@ -9,6 +9,7 @@
 #include <string>
 #include "ps/internal/van.h"
 #include <assert.h>
+#include <stdlib.h>
 #if _MSC_VER
 #define rand_r(x) rand()
 #endif
@@ -152,6 +153,18 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
         if (my_node_.id != Node::kEmpty) {
           std::string my_id = "ps" + std::to_string(my_node_.id);
           zmq_setsockopt(udp_sender, ZMQ_IDENTITY, my_id.data(), my_id.size());
+          int tos = (node.udp_port.size()-i-1)*32;
+          if(zmq_setsockopt(udp_sender, ZMQ_TOS, &tos, sizeof(tos))==0){
+              int dscp = (node.udp_port.size()-i-1)*8;
+              std::string passwd = CHECK_NOTNULL(Environment::Get()->find("SUDO_PASSWD"));
+              std::string command = "echo " + passwd + " | " +"sudo -S iptables -t mangle -A OUTPUT -p udp --dst " + node.hostname + " --dport "+ std::to_string(node.udp_port[i])+" -j DSCP --set-dscp "+std::to_string(dscp);
+              std::cout << "command = " << command << std::endl;
+              system(command.c_str());
+              std::cout << "Successful to Set " << "udp[" << i+1 << "]:"<< my_node_.id << "=>" << node.id << "(" << node.hostname.c_str() << ":" << node.udp_port[i] << "):" << "tos=" << tos << std::endl;
+              
+          }else{
+              std::cout << "Fail to Set " << "udp[" << i+1 << "]:"<< my_node_.id << "=>" << node.id << "(" << node.hostname.c_str() << ":" << node.udp_port[i] << "):" << "tos=" << tos << std::endl;
+          }
         }
        
         int udp_send_buf_size = 4096*1024;  //4M 
@@ -252,6 +265,16 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
     if (my_node_.id != Node::kEmpty) {
       std::string my_id = "ps" + std::to_string(my_node_.id);
       zmq_setsockopt(sender, ZMQ_IDENTITY, my_id.data(), my_id.size());
+      if(node.udp_port.size()!=0){
+          int tos = node.udp_port.size()*32;
+          if(zmq_setsockopt(sender, ZMQ_TOS, &tos, sizeof(tos))==0){
+              std::cout << "Successful to Set " << "tcp[" << 0 << "]:"<< my_node_.id << "=>" << node.id << "(" << node.hostname.c_str() << ":" << node.port << "):" << "tos=" << tos << std::endl;
+              
+          }else{
+              std::cout << "Fail to Set " << "tcp[" << 0 << "]:"<< my_node_.id << "=>" << node.id << "(" << node.hostname.c_str() << ":" << node.port << "):" << "tos=" << tos << std::endl;
+          }
+      }
+      
     }
     // connect
 /* #ifdef UDP_CHANNEL

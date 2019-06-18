@@ -452,15 +452,41 @@ void Van::Stop() {
   barrier_count_.clear();
 }
 #ifdef DOUBLE_CHANNEL
+#ifdef ADAPTIVE_K
+float Van::Average_tp(){
+    float avg_tp = resender_->get_average_throughput();
+   // std::cout << "avg_tp = " << avg_tp;
+    return avg_tp;
+}
+#endif
 int Van::Send( Message& msg, int channel, int tag) {
 	int send_bytes = 0;
     
 
   if(channel == 0){
+#ifdef ADAPTIVE_K
+    if(msg.meta.push && msg.meta.request){
+          if(msg.meta.first_key == 0) monitor_count = 0;
+         /*  unsigned seed = time(NULL) + my_node_.id;
+          float monitor_rate = 20; 
+          if (rand_r(&seed) % 100 < monitor_rate) {
+            msg.meta.udp_reliable=1;
+          }*/
+          if (monitor_count % 100 == 0) {
+            msg.meta.udp_reliable=1;
+          }
+          if(msg.meta.udp_reliable){
+              //std::cout << "ready to monitor this message" << std::endl;
+              resender_->AddOutgoing(msg);
+          }
+          monitor_count++;
+      } 
+#endif
 	  send_bytes = SendMsg_TCP(msg, tag);
+
   }else{
 #ifdef CHANNEL_MLR   
-    if(msg.meta.push){
+    if(msg.meta.push ){
          for(int c = 0; c < resender_-> get_channel_num(); ++c){
             //std::cout << "lr[ "<< c << "] = " << resender_-> get_realtime_lr(c) << std::endl; 
             resender_-> get_realtime_lr(c);
@@ -551,9 +577,17 @@ void Van::Receiving_TCP() {
     //if (resender_ && resender_->AddIncomming(msg)) continue;
 	/* if(msg.meta.push && msg.meta.request){
 		if (resender_ && resender_->AddIncomming_Push(msg)) continue;
-	} */
-
+	}  */
+    /*server run*/
+    if(msg.meta.push && msg.meta.request){
+        //std::cout << "get a push&& request msg" << std::endl;
+        if(msg.meta.udp_reliable){
+            if (resender_ && resender_->AddIncomming(msg)) continue;
+        }
+	}
+    /*worker run*/
     if(msg.meta.control.cmd == Control::ACK){
+        //std::cout << "get an  ACK" << std::endl;
 		if (resender_ && resender_->AddIncomming(msg)) continue;
 	}
 

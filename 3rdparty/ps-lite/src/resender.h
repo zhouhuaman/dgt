@@ -16,7 +16,9 @@
 /* #ifndef CHANNEL_MLR
 #define CHANNEL_MLR
 #endif */
-
+#ifndef ADAPTIVE_K
+#define ADAPTIVE_K
+#endif
 namespace ps {
 
 /**
@@ -153,7 +155,6 @@ class Resender {
    */
   bool AddIncomming(const Message& msg) {
     // a message can be received by multiple times
-	//std::cout << "Enter AddIncomming" << std::endl;
     if (msg.meta.control.cmd == Control::TERMINATE) {
       return false;
     } else if (msg.meta.control.cmd == Control::ACK) {
@@ -161,7 +162,23 @@ class Resender {
       auto key = msg.meta.control.msg_sig;
 	  //std::cout << "key " << key << "have acked" << "at role = " << van_->my_node().role << std::endl;
       auto it = send_buff_.find(key);
+#ifdef ADAPTIVE_K
+      Time now = Now();
+      int meta_size= sizeof(it->second.msg.meta);
+      int data_size=0;
+      if (it->second.msg.data.size()) {
+        for (const auto& d : it->second.msg.data)  data_size += d.size();
+      }
+      long transfer_time = now.count()-it->second.send.count();
+      //std::cout << "meta_size = " << meta_size << " data_len= " << data_size << std::endl;   
+      //std::cout << "transfer_time = " << transfer_time << " us" << std::endl;
+      float tp = (meta_size+ data_size)*1000.0*1000.0/transfer_time;
+      //std::cout << "throughput = " << tp << std::endl;
+      throughput.push_back(tp);
+#endif
       if (it != send_buff_.end()) send_buff_.erase(it);
+      //std::cout << "send_buff_size= " << send_buff_.size() << std::endl;
+      
       mu_.unlock();
       return true;
     } else {
@@ -181,7 +198,7 @@ class Resender {
       ack.meta.control.msg_sig = key;
       van_->Send(ack,0,0);
       // warning
-      if (duplicated) LOG(WARNING) << "Duplicated message: " << msg.DebugString() << "key:" << key << "at role = " << van_->my_node().role << std::endl;
+      //if (duplicated) LOG(WARNING) << "Duplicated message: " << msg.DebugString() << "key:" << key << "at role = " << van_->my_node().role << std::endl;
       return duplicated;
     }
   }
@@ -189,13 +206,27 @@ class Resender {
 
 
  private:
-  using Time = std::chrono::milliseconds;
+  //using Time = std::chrono::milliseconds;
+  using Time = std::chrono::microseconds;
   // the buffer entry
   struct Entry {
     Message msg;
     Time send;
     int num_retry = 0;
   };
+#ifdef ADAPTIVE_K
+    public:
+    std::vector<float> throughput;
+    float get_average_throughput(){
+        //std::cout << "before accumulate, size = " << throughput.size() << std::endl;
+        float sum = std::accumulate(std::begin(throughput),std::end(throughput),0.0);
+        float avg = sum/throughput.size();
+        //std::cout << "sum = " << sum << "size=" << throughput.size() << std::endl;
+        throughput.clear();
+        //std::cout << "avg = " << avg << std::endl;
+        return avg;
+    }
+#endif
 #ifdef CHANNEL_MLR
   public:
   std::vector<std::unordered_map<uint64_t, Entry>> send_buff_;
@@ -313,7 +344,7 @@ class Resender {
       Time now = Now();
       mu_.lock();
       
-      for (auto& it : send_buff_) {
+      /* for (auto& it : send_buff_) {
         if (it.second.send + Time(timeout_) * (1+it.second.num_retry) < now) {
 		  if(it.second.msg.data.size() > 0){
 			  char* p_key = it.second.msg.data[0].data();
@@ -328,17 +359,17 @@ class Resender {
 			}
           resend.push_back(it.second.msg);
           ++it.second.num_retry;
-          LOG(WARNING) << van_->my_node().ShortDebugString()
+          /*LOG(WARNING) << van_->my_node().ShortDebugString()
                        << ": Timeout to get the ACK message. Resend (retry="
                        << it.second.num_retry << ") " << it.second.msg.DebugString();
 		  
 		 // if(it.second.msg.data.size() > 0) std::cout<< "data.size = " << it.second.msg.data.size()<<" key=" << (SArray<Key>)it.second.msg.data[0] << "len = " << (SArray<int>)it.second.msg.data[2]<< std::endl;
           //CHECK_LT(it.second.num_retry, max_num_retry_);
         }
-      }
+      }*/
       mu_.unlock();
 
-      for (auto& msg : resend) van_->Send(msg,1,0);
+      //for (auto& msg : resend) van_->Send(msg,msg.meta.channel,0); */
     }
   }
 #endif

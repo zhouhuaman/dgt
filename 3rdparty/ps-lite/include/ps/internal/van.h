@@ -14,6 +14,9 @@
 #include <unordered_set>
 #include "ps/base.h"
 #include "ps/internal/message.h"
+#ifndef ADAPTIVE_K
+#define ADAPTIVE_K
+#endif
 namespace ps {
 class Resender;
 
@@ -54,6 +57,9 @@ class Van {
      * \return the number of bytes sent. -1 if failed
      */
 #ifdef DOUBLE_CHANNEL
+#ifdef ADAPTIVE_K
+    float Average_tp();
+#endif
     /*channel = 0 means tcp channel 1->udp channel tag = 0 means send imediately.*/
 	int Send(Message &msg, int channel = 0, int tag = 0);
 #ifdef CHANNEL_MLR
@@ -140,7 +146,9 @@ class Van {
     Node my_node_;
     bool is_scheduler_;
     std::mutex start_mu_;
-
+ public:
+    /** msg resender */
+    Resender *resender_ = nullptr;
  private:
     /** thread function for receving */
 	/*if DOUBLE_CHANNEL, Receiving=> Receiving_TCP and  Receiving_UDP*/
@@ -167,6 +175,9 @@ class Van {
     size_t recv_bytes_ = 0;
     int num_servers_ = 0;
     int num_workers_ = 0;
+#ifdef ADAPTIVE_K
+    unsigned long monitor_count = 0;
+#endif
 
 #ifdef DOUBLE_CHANNEL
 	 /** the thread for receiving tcp messages */
@@ -183,8 +194,7 @@ class Van {
     /** the thread for sending heartbeat */
     std::unique_ptr<std::thread> heartbeat_thread_;
     std::vector<int> barrier_count_;
-    /** msg resender */
-    Resender *resender_ = nullptr;
+    
     int drop_rate_ = 0;
     std::atomic<int> timestamp_{0};
     int init_stage = 0;

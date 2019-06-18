@@ -380,8 +380,8 @@ class KVStoreDistServer {
       }
 #ifdef GRAD_RECOVERY
       update_buf->update_num += 1;
-	  //CopyFromTo(update_buf->merged, update_buf->temp_array);
-	  //update_buf->temp_array.WaitToRead();
+	  /* CopyFromTo(update_buf->merged, update_buf->temp_array);
+	  update_buf->temp_array.WaitToRead(); */
 	  if(!update_buf->request.empty() && key == update_buf->request[0].key_end){
 		  // find the last key and check if some key haven't updated
 		  int key_begin = update_buf->request[0].key_begin;
@@ -403,11 +403,11 @@ class KVStoreDistServer {
 					}
 					//int lost_worker_num = (size_t) ps::NumWorkers() - tmp_update_buf.request.size();
 					//for(int j = 0; j < lost_worker_num; ++j){
-						if(tmp_update_buf.request.size() == 0){
-							CopyFromTo(tmp_update_buf.temp_array, tmp_update_buf.merged);
-							tmp_update_buf.merged.WaitToRead();
-							//continue;
-						}
+                    /* if(tmp_update_buf.request.size() == 0){
+                        CopyFromTo(tmp_update_buf.temp_array, tmp_update_buf.merged);
+                        tmp_update_buf.merged.WaitToRead();
+                        //continue;
+                    } */
 						/* tmp_update_buf.merged += tmp_update_buf.temp_array;
 						tmp_update_buf.merged.WaitToRead(); */
 					//}
@@ -427,8 +427,8 @@ class KVStoreDistServer {
                     }
 					//then temp_array = merge/num_worker
 					
-					//CopyFromTo(tmp_update_buf.merged, tmp_update_buf.temp_array);
-					//tmp_update_buf.temp_array.WaitToRead(); 
+					/* CopyFromTo(tmp_update_buf.merged, tmp_update_buf.temp_array);
+					tmp_update_buf.temp_array.WaitToRead(); */ 
 					tmp_update_buf.update_num += 1;
                     for (const auto& req : tmp_update_buf.request) {
                         //printf("response to %d:%d\n",req.sender,req.timestamp);
