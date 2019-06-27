@@ -408,20 +408,6 @@ class KVStoreDistServer {
       }
       for (const auto& req : update_buf->request) {
 		//printf("response to %d:%d\n",req.sender,req.timestamp);
-        static int msg_recv_num = 0;
-        static int msg_totol_num = 0;
-        std::cout << "req.sender = " << req.sender << std::endl;
-        if(req.sender == 9){
-            msg_recv_num ++;
-            if(req.first_key == req.key_end){
-                msg_totol_num += req.key_end - req.key_begin;
-                if(msg_recv_num > 1000){
-                    std::cout << "msg loss rate = " << 1 - msg_recv_num/msg_totol_num;
-                    msg_recv_num = 0;
-                    msg_totol_num = 0;
-                }
-            }
-        }
         if(req.channel == 0){
             server->Response(req);
         } 

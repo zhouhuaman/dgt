@@ -17,6 +17,9 @@
 #ifndef ADAPTIVE_K
 #define ADAPTIVE_K
 #endif
+#ifndef ENCODE
+#define ENCODE
+#endif
 namespace ps {
 class Resender;
 
@@ -67,6 +70,13 @@ class Van {
 #endif
 #else
     int Send(Message &msg);
+#endif
+#ifdef ENCODE
+    float encode(Message& msg);
+    void decode(Message& msg);
+    void msg_float_print(Message& msg, int n);
+    std::unordered_map<int, SArray<char>> residual;
+    int enable_encode=0;
 #endif
     /**
      * \brief return my node
@@ -200,6 +210,7 @@ class Van {
     int init_stage = 0;
 #ifdef DOUBLE_CHANNEL
 	std::mutex mu_;
+    std::unordered_map<int,Channel_MS> channel_manage_sheet;
 #endif
 
     /**

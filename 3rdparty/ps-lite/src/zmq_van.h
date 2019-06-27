@@ -85,14 +85,15 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
         udp_receiver_ = zmq_socket(context_, ZMQ_DISH);
         CHECK(udp_receiver_ != NULL)
     << "create udp_receiver[" << i<<" ]socket failed: " << zmq_strerror(errno);
-        int udp_recv_buf_size = 4096*1024;  //4M 
+        /* int udp_recv_buf_size = 4096*1024;  //4M 
         int rc = zmq_setsockopt(udp_receiver_, ZMQ_RCVBUF, &udp_recv_buf_size, sizeof(udp_recv_buf_size));
         assert(rc == 0);
         int check_rcv_buff = 0;
         size_t check_len = sizeof(check_rcv_buff);
         rc = zmq_getsockopt(udp_receiver_, ZMQ_RCVBUF, &check_rcv_buff, &check_len);
         
-        std::cout << "recv["<< i <<"] buf size = " << check_rcv_buff << std::endl;
+        std::cout << "recv["<< i <<"] buf size = " << check_rcv_buff << std::endl; */
+        int rc;
         int local = GetEnv("DMLC_LOCAL", 0);
         std::string hostname = node.hostname.empty() ? "*" : node.hostname;
         int use_kubernetes = GetEnv("DMLC_USE_KUBERNETES", 0);
@@ -167,14 +168,14 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
           }
         }
        
-        int udp_send_buf_size = 4096*1024;  //4M 
+        /* int udp_send_buf_size = 4096*1024;  //4M 
         int rc = zmq_setsockopt(udp_sender, ZMQ_SNDBUF, &udp_send_buf_size, sizeof(udp_send_buf_size));
         assert(rc == 0);
         int check_snd_buff = 0;
         size_t check_len = sizeof(check_snd_buff);
         rc = zmq_getsockopt(udp_sender, ZMQ_SNDBUF, &check_snd_buff, &check_len);
-        std::cout << "send buf size = " << check_snd_buff << std::endl;
-        
+        std::cout << "send buf size = " << check_snd_buff << std::endl; */
+        int rc;
         // connect
         std::string addr = "udp://" + node.hostname + ":" + std::to_string(node.udp_port[i]);
         
@@ -533,6 +534,7 @@ int SendMsg(Message& msg) override {
 		
 	  break;
     }
+    
     return recv_bytes;
   }
   
@@ -606,6 +608,7 @@ int RecvMsg_TCP(Message* msg) override {
 		if (!zmq_msg_more(zmsg)) { identify_flag = false; }
 	  break;
     }
+    
     return recv_bytes;
   }
 #else
@@ -690,6 +693,7 @@ int RecvMsg(Message* msg) override {
   std::vector<void *> udp_receiver_vec;;
   void *udp_receiver_ = nullptr;
   bool identify_flag = false; //if or not read the identify already
+
 #endif
 #ifdef CHANNEL_LOG
   FILE *fp;

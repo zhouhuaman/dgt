@@ -167,7 +167,7 @@ struct Meta {
   /** \brief default constructor */
 #ifdef UDP_CHANNEL
   Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
-           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),key_begin(0),key_end(0), udp_reliable(false),channel(0),sender(kEmpty), recver(kEmpty),
+           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),key_begin(0),key_end(0), udp_reliable(false),channel(0),msg_type(-1),sender(kEmpty), recver(kEmpty),
            request(false), push(false), simple_app(false) {}
 #else
 	 Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
@@ -196,6 +196,13 @@ struct Meta {
 	ss << ", key_end = " << key_end;
 	ss << ", udp_reliable = " << udp_reliable;
     ss << ", channel = " << channel;
+    ss << ", msg_type = " << msg_type;
+    ss << ", push_op_num = " << push_op_num;
+    if(compr.size()){
+        ss << ", compr = [";
+        for(auto v : compr) ss << " " << v;
+        ss << " ]";
+    }
 #endif
   
 
@@ -237,6 +244,9 @@ struct Meta {
   int key_begin;
   int key_end;
   bool udp_reliable;
+  std::vector<float> compr;
+  int msg_type;     //point that the type of msg, push:paramter: 1 gradient/update:2 pull: request:3 default:0
+  int push_op_num;
 #endif
 
   int channel;
@@ -258,6 +268,16 @@ struct Meta {
   /** \brief system control message */
   Control control;
 };
+// rank struct, assist to msg's contribution rank
+struct Message_RU{
+    int index;
+    float contri;
+};
+// channel manage struct
+struct Channel_MS{
+    int push_op_num = 0;
+    std::unordered_map<int,bool> item;  //int:key_end in layer, bool:point out the channel is open or close;
+};
 /**
  * \brief messages that communicated amaong nodes.
  */
@@ -266,6 +286,7 @@ struct Message {
   /*\brief contri*/
   float contri;
   float p_loss;
+  int rank;
 #endif
   /** \brief the meta info of this message */
   Meta meta;

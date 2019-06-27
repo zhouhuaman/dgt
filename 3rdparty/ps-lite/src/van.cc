@@ -317,6 +317,10 @@ void Van::Start(int customer_id) {
 
       }
 #endif
+#ifdef ENCODE
+        enable_encode = atoi(CHECK_NOTNULL(Environment::Get()->find("ENABLE_ENCODE")));
+        std::cout << "enable_encode = " << enable_encode << std::endl;
+#endif
       // cannot determine my id now, the scheduler will assign it later
       // set it explicitly to make re-register within a same process possible
       my_node_.id = Node::kEmpty;
@@ -459,10 +463,93 @@ float Van::Average_tp(){
     return avg_tp;
 }
 #endif
+#ifdef ENCODE
+void  Van::msg_float_print(Message& msg, int n){
+    float *p = (float*) msg.data[1].data();
+    for(int i = 0; i<n; ++i){
+        std::cout << " " << *(p+i);
+        if(i % 10 == 0) std::cout << std::endl;
+    }
+    std::cout << std::endl;
+}
+float Van::encode(Message& msg){
+    SArray<char>& s_val = msg.data[1];
+    float *ps = (float*)s_val.data();
+    int d_val_size = 0;
+    assert(s_val.size() == *((int*)msg.data[2].data()));
+    if(s_val.size()%16 == 0){
+        d_val_size = s_val.size()/16;
+    }else{
+        d_val_size = s_val.size()/16 + 1;
+    }
+    SArray<char> d_val(d_val_size);
+    char *pd = d_val.data();
+    auto it = residual.find(msg.meta.first_key);
+    if(it == residual.end()) residual[msg.meta.first_key] = SArray<char>(s_val.size());
+    float *pr = (float*)residual[msg.meta.first_key].data();
+    
+    int param_n = s_val.size() / sizeof(float);
+    float max_v = 0.0, min_v = 0.0;
+    for(int i = 0; i < param_n; ++i){
+        //*(pr+i) += *(ps+i);
+        *(pr+i) = *(ps+i);
+    }
+    for(int i = 0; i < param_n; ++i){
+        max_v = std::max(max_v, *(pr+i));
+        min_v = std::min(min_v, *(pr+i));
+    }
+    for(int i = 0; i < 4; ++i){
+        float zv = ((min_v + i*(max_v-min_v)/4) + (min_v + (i+1)*(max_v-min_v)/4))/2;
+        msg.meta.compr.push_back(zv);
+    }
+    char qj = 0;
+    for(int i = 0; i < param_n; ++i){
+        for(int j=0; j < 4; ++j){
+            if(*(pr+i) >= min_v + j*(max_v-min_v)/4 && *(pr+i) <= min_v + (j+1)*(max_v-min_v)/4){
+                qj = j;
+                break;
+            }
+        }
+        *pd |= (qj << ((3-i%4)*2));
+        if(i%4 == 0) pd += 1;
+        *(pr+i) -= msg.meta.compr[qj];
+    } 
+    msg.data[1] = d_val;
+    msg.meta.vals_len = msg.data[1].size();
+}
+void Van::decode(Message& msg) {
+    SArray<char>& s_val = msg.data[1];
+    char *ps = (char*)s_val.data();
+    int d_val_size = *((int*)msg.data[2].data());
+    SArray<char> d_val(d_val_size);
+    float *pd = (float*)d_val.data();
+    //int nlen = *((int*)msg.data[2].data());
+    int nlen = s_val.size();
+    char qj = 0;
+    int param_n = d_val_size/sizeof(float);
+    for(int i = 0; i < nlen; ++i){
+        for(int j =0; j<4; ++j){
+            qj = (*(ps+i) >> (6-2*j)) & 0x03;
+            *pd = msg.meta.compr[qj];
+            pd += 1;
+            param_n -= 1;
+            if(param_n == 0) break;
+        }   
+    } 
+    msg.data[1] = d_val;
+    msg.meta.vals_len = msg.data[1].size();
+}
+#endif
 int Van::Send( Message& msg, int channel, int tag) {
 	int send_bytes = 0;
-    
-
+#ifdef ENCODE
+    if(enable_encode && msg.meta.msg_type == 2){  //if msg is push's gradient,then encode the msg
+        //std::cout << "***" << msg.DebugString() << std::endl;
+        //msg_float_print(msg, 20);
+        encode(msg);
+        //std::cout << "###" << msg.DebugString() << std::endl;
+    }
+#endif
   if(channel == 0){
 #ifdef ADAPTIVE_K
     if(msg.meta.push && msg.meta.request){
@@ -557,7 +644,28 @@ void Van::Receiving_TCP() {
   while (true) {
     Message msg;
     int recv_bytes = RecvMsg_TCP(&msg);
-	
+    // dicide to drop the msg or not
+    if(my_node_.role == 0 && msg.meta.push){  //server
+        
+        if(msg.meta.first_key == 0){ // this msg is a first push's msg of a new push
+            auto it = channel_manage_sheet.find(msg.meta.sender);
+            if(it == channel_manage_sheet.end()) {
+                Channel_MS tms;
+                channel_manage_sheet[msg.meta.sender] = tms;
+            }
+            channel_manage_sheet[msg.meta.sender].push_op_num += 1;
+            if(channel_manage_sheet[msg.meta.sender].item.size() != 0){
+                for(auto &i : channel_manage_sheet[msg.meta.sender].item){
+                    i.second = true;
+                }
+            }
+        }
+        if(msg.meta.first_key == msg.meta.key_end){
+            auto it = channel_manage_sheet.find(msg.meta.sender);
+            if(it != channel_manage_sheet.end())
+                channel_manage_sheet[msg.meta.sender].item[msg.meta.key_end] = false;
+        }
+    }
     // For debug, drop received message
     if (ready_.load() && drop_rate_ > 0) {
       unsigned seed = time(NULL) + my_node_.id;
@@ -566,7 +674,14 @@ void Van::Receiving_TCP() {
         continue;
       }
     }
-
+#ifdef ENCODE
+    if(enable_encode && msg.meta.msg_type == 2){   //if msg is push's gradient,then decode it
+      // std::cout << "$$$" << msg.DebugString() << std::endl;
+       decode(msg);
+       //std::cout << "@@@" << msg.DebugString() << std::endl;
+       //msg_float_print(msg, 20);
+    }
+#endif
     CHECK_NE(recv_bytes, -1);
     recv_bytes_ += recv_bytes;
     if (Postoffice::Get()->verbose() >= 2) {
@@ -645,10 +760,31 @@ void Van::Receiving_UDP(int channel) {
   Meta recovery_nodes;  // store recovery nodes
   recovery_nodes.control.cmd = Control::ADD_NODE;
   PS_VLOG(1) << "Start thread{Receiving_UDP} in UDP channel [" << channel+1 << "]";
+  //static int drop_num = 0;
   while (true) {
     Message msg;
     int recv_bytes = RecvMsg_UDP(channel, &msg);
-	
+	//decide drop the msg or not
+    if(my_node_.role == 0 && msg.meta.push){
+        auto it = channel_manage_sheet.find(msg.meta.sender);
+        if(it != channel_manage_sheet.end()){
+            if(msg.meta.push_op_num < channel_manage_sheet[msg.meta.sender].push_op_num){
+                //std::cout << "msg_push = " << msg.meta.push_op_num << ",sheet_push = " << channel_manage_sheet[msg.meta.sender].push_op_num << std::endl;
+                //drop_num++;
+                //std::cout << "drop_num = " << drop_num << std::endl;
+                continue;
+            }
+            auto iti = channel_manage_sheet[msg.meta.sender].item.find(msg.meta.key_end);
+            if(iti != channel_manage_sheet[msg.meta.sender].item.end()){
+                if(!channel_manage_sheet[msg.meta.sender].item[msg.meta.key_end]){
+                    //drop_num++;
+                    //std::cout << "channel["<< msg.meta.sender << "," << msg.meta.key_end << "] has closed!!!" << std::endl; 
+                    //std::cout << "drop_num = " << drop_num << std::endl;
+                    continue;
+                }
+            }
+        }
+    }
     // For debug, drop received message
     if (ready_.load() && drop_rate_ > 0) {
       unsigned seed = time(NULL) + my_node_.id;
@@ -657,7 +793,14 @@ void Van::Receiving_UDP(int channel) {
         continue;
       }
     }
-
+#ifdef ENCODE
+    if(enable_encode && msg.meta.msg_type == 2){   //if msg is push's gradient,then decode it
+       //std::cout << "$$$" << msg.DebugString() << std::endl;
+       decode(msg);
+       //std::cout << "@@@" << msg.DebugString() << std::endl;
+       //msg_float_print(msg, 20);
+    }
+#endif
     CHECK_NE(recv_bytes, -1);
     recv_bytes_ += recv_bytes;
     if (Postoffice::Get()->verbose() >= 2) {
@@ -772,7 +915,9 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   pb.set_key_end(meta.key_end);
   pb.set_udp_reliable(meta.udp_reliable);
   pb.set_channel(meta.channel);
-  
+  for (auto v : meta.compr) pb.add_compr(v);
+  pb.set_msg_type(meta.msg_type);
+  pb.set_push_op(meta.push_op_num);
 #endif
   pb.set_push(meta.push);
   pb.set_request(meta.request);
@@ -835,6 +980,11 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
   
   meta->udp_reliable = pb.udp_reliable();
   meta->channel = pb.channel();
+  for(int i = 0; i < pb.compr_size();++i){
+          meta->compr.push_back(pb.compr(i));
+    }
+  meta->msg_type = pb.msg_type();
+  meta->push_op_num = pb.push_op();
 #endif
   meta->request = pb.request();
   meta->push = pb.push();

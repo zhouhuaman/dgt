@@ -69,4 +69,7 @@ message PBMeta {
    optional int32 key_end = 19;
    optional bool udp_reliable = 20;
    optional int32 channel = 21;
+   repeated float compr = 22;
+   optional int32 msg_type = 23;
+   optional int32 push_op = 24;
 }
