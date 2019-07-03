@@ -113,6 +113,8 @@ class KVWorker : public SimpleApp {
     using namespace std::placeholders;
     slicer_ = std::bind(&KVWorker<Val>::DefaultSlicer, this, _1, _2, _3);
     obj_ = new Customer(app_id, customer_id, std::bind(&KVWorker<Val>::Process, this, _1));
+    contri_alpha = dmlc::GetEnv("DGT_CONTRI_ALPHA", 0.3);
+    std::cout << "contri_alpha = " << contri_alpha << std::endl;
   }
 
   /** \brief deconstructor */
@@ -329,6 +331,7 @@ class KVWorker : public SimpleApp {
   int64_t push_op_num = 0;
   std::unordered_map<int, float> pre_max_N;
   float max_N = 0.0;
+  float contri_alpha = 0.3;
   float p_N = 0.0;
   float max_contri = 0.0;
   std::unordered_map<int, float> pre_max_contri;
@@ -426,6 +429,7 @@ class KVServer : public SimpleApp {
   void Process(const Message& msg);
   /** \brief request handle */
   ReqHandle request_handle_;
+  std::unordered_map<int,int> tag_map;
 
 };
 
@@ -542,15 +546,22 @@ void KVServer<Val>::Response(const KVMeta& req, const KVPairs<Val>& res) {
 #endif
     }
   }
-  /* if(send_bytes > TCP_MIN_MSG_SIZE || j == n-1){
-		tcp_tag = ZMQ_SNDMORE;
-    }
-	send_bytes += Postoffice::Get()->van()->Send(msg,0,tcp_tag);
-	if(tcp_tag == ZMQ_SNDMORE){
-		send_bytes = 0;
-		tcp_tag = 0;
-	} */
-  Postoffice::Get()->van()->Send(msg);
+  if(msg.meta.push){   //push response msg
+      int tag = 0;
+      //if(msg.meta.first_key == msg.meta.key_end) tag = 0;
+      msg.meta.channel = 0;
+      Postoffice::Get()->van()->Send(msg,msg.meta.channel,tag);  //real send when get last msg 
+  }else{                //pull response msg, need to jilei
+      
+      if(msg.meta.first_key == msg.meta.key_begin) tag_map[msg.meta.recver] = ZMQ_SNDMORE;
+      if(msg.meta.first_key == msg.meta.key_end) tag_map[msg.meta.recver] = 0;
+      int tag = tag_map[msg.meta.recver];
+      msg.meta.channel = 0;
+      Postoffice::Get()->van()->Send(msg,msg.meta.channel,tag);  //real send when get last msg
+      
+      
+  }
+  
 }
 
 template <typename Val>
@@ -696,7 +707,7 @@ float KVWorker<Val>::Evaluate_msg_contri(KVPairs<char>& kv, Message& msg) {
     float c = 0.4;
     auto it = contri.find(msg.meta.first_key);
     if(it == contri.end()) contri[msg.meta.first_key] = 0.0;
-    contri[msg.meta.first_key] = a * contri[msg.meta.first_key] + (1-a)*(N/nlen);
+    contri[msg.meta.first_key] = contri_alpha * contri[msg.meta.first_key] + (1-contri_alpha)*(N/nlen);
     /* if(push_op_num == 2){
        contri[msg.meta.first_key] = c * p_N;
     }else{
@@ -771,13 +782,13 @@ int KVWorker<Val>::Get_channel(int index, int max_index, int C, float k) {
 #ifdef ADAPTIVE_K
 template <typename Val>
 float KVWorker<Val>::adaptive_k(){
-    float tp = Postoffice::Get()->van()->Average_tp();
-    if(throughput_rt != 0.0){
+    //float tp = Postoffice::Get()->van()->Average_tp();
+    /* if(throughput_rt != 0.0){
         delta_tp = (tp-throughput_rt)/throughput_rt;
-    }
+    } */
     //
-    std::cout << "tp = " << tp << " delta_tp=" << delta_tp << std::endl;
-    throughput_rt = tp;
+    //std::cout << "tp = " << tp << " delta_tp=" << delta_tp << std::endl;
+    //throughput_rt = tp;
     //float k = rt_loss/first_loss * (1+delta_tp);
     float k = dmlc_k_init*(rt_loss/first_loss);
     return k;
@@ -956,18 +967,28 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
         }
         auto engine = std::default_random_engine{};
         std::shuffle(std::begin(index_vec), std::end(index_vec), engine); */
-        int ch=0;
+       
+        
         for(size_t j = 0; j < msg_vector.size(); ++j){
+            int ch=0;
+            int tag = 0;
             ch = Get_channel(msg_vector[j].rank, msg_vector.size()-1, udp_channel_num, dmlc_k);
            
-            if(msg_vector[j].meta.first_key == 0 || msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) ch=0;
-          
             msg_vector[j].meta.channel = ch;
+            if(msg_vector[j].meta.first_key == 0 || msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) msg_vector[j].meta.channel=0;
+            if(msg_vector[j].meta.channel == 0){
+               tag = ZMQ_SNDMORE;
+               //tag = 0;
+               if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) tag = 0;
+            }
+    
+ 
             //std::cout <<"key = " << msg_vector[j].meta.first_key <<" ,congtri = "<< msg_vector[j].contri << ",ch = " << ch << std::endl;
-            if(enable_send_drop && ch != 0){
+            if(enable_send_drop && msg_vector[j].meta.channel != 0){
                 continue;
             }
-            Postoffice::Get()->van()->Send(msg_vector[j],ch,0); 
+               
+            Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
             
             /* struct timespec req;
             req.tv_sec = 0;
@@ -977,8 +998,11 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
         msg_vector.clear();
     }else{
         for(size_t j = 0; j < msg_vector.size(); ++j){
+            int tag = ZMQ_SNDMORE;
+            //int tag = 0;
+            if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) tag = 0;
             msg_vector[j].meta.channel = 0;
-            Postoffice::Get()->van()->Send(msg_vector[j],0,0); 
+            Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
         }
         msg_vector.clear();
     }
@@ -1052,9 +1076,9 @@ void KVWorker<Val>::Process(const Message& msg) {
   }
 
   // finished, run callbacks
-#ifdef LITTLE_GRAIN_MSG
+#ifdef LITTLE_GRAIN_MSG_OFF
 	//std::cout << obj_->NumResponse(ts) << "---" << msg.meta.tracker_num << std::endl;
-	if(msg.meta.push && !is_first_push_op){
+	if(msg.meta.push){
 		if (msg.meta.first_key == msg.meta.key_end)  {
         //if (obj_->NumResponse(ts) == msg.meta.tracker_num-1)  {
         /* static unsigned int tot_response = 0;
@@ -1081,7 +1105,7 @@ void KVWorker<Val>::Process(const Message& msg) {
 	}
 	
 #else
-  if (obj_->NumResponse(ts) == Postoffice::Get()->num_servers() - 1)  {
+  if (obj_->NumResponse(ts) == Postoffice::Get()->num_servers())  {
     RunCallback(ts);
   }
 #endif

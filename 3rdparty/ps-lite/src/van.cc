@@ -552,14 +552,14 @@ int Van::Send( Message& msg, int channel, int tag) {
 #endif
   if(channel == 0){
 #ifdef ADAPTIVE_K
-    if(msg.meta.push && msg.meta.request){
+    /* if(msg.meta.push && msg.meta.request){
           if(msg.meta.first_key == 0) monitor_count = 0;
          /*  unsigned seed = time(NULL) + my_node_.id;
           float monitor_rate = 20; 
           if (rand_r(&seed) % 100 < monitor_rate) {
             msg.meta.udp_reliable=1;
           }*/
-          if (monitor_count % 100 == 0) {
+         /* if (monitor_count % 100 == 0) {
             msg.meta.udp_reliable=1;
           }
           if(msg.meta.udp_reliable){
@@ -567,7 +567,7 @@ int Van::Send( Message& msg, int channel, int tag) {
               resender_->AddOutgoing(msg);
           }
           monitor_count++;
-      } 
+      } */ 
 #endif
 	  send_bytes = SendMsg_TCP(msg, tag);
 
@@ -645,27 +645,7 @@ void Van::Receiving_TCP() {
     Message msg;
     int recv_bytes = RecvMsg_TCP(&msg);
     // dicide to drop the msg or not
-    if(my_node_.role == 0 && msg.meta.push){  //server
-        
-        if(msg.meta.first_key == 0){ // this msg is a first push's msg of a new push
-            auto it = channel_manage_sheet.find(msg.meta.sender);
-            if(it == channel_manage_sheet.end()) {
-                Channel_MS tms;
-                channel_manage_sheet[msg.meta.sender] = tms;
-            }
-            channel_manage_sheet[msg.meta.sender].push_op_num += 1;
-            if(channel_manage_sheet[msg.meta.sender].item.size() != 0){
-                for(auto &i : channel_manage_sheet[msg.meta.sender].item){
-                    i.second = true;
-                }
-            }
-        }
-        if(msg.meta.first_key == msg.meta.key_end){
-            auto it = channel_manage_sheet.find(msg.meta.sender);
-            if(it != channel_manage_sheet.end())
-                channel_manage_sheet[msg.meta.sender].item[msg.meta.key_end] = false;
-        }
-    }
+    
     // For debug, drop received message
     if (ready_.load() && drop_rate_ > 0) {
       unsigned seed = time(NULL) + my_node_.id;
@@ -760,31 +740,11 @@ void Van::Receiving_UDP(int channel) {
   Meta recovery_nodes;  // store recovery nodes
   recovery_nodes.control.cmd = Control::ADD_NODE;
   PS_VLOG(1) << "Start thread{Receiving_UDP} in UDP channel [" << channel+1 << "]";
-  //static int drop_num = 0;
+  
   while (true) {
     Message msg;
     int recv_bytes = RecvMsg_UDP(channel, &msg);
-	//decide drop the msg or not
-    if(my_node_.role == 0 && msg.meta.push){
-        auto it = channel_manage_sheet.find(msg.meta.sender);
-        if(it != channel_manage_sheet.end()){
-            if(msg.meta.push_op_num < channel_manage_sheet[msg.meta.sender].push_op_num){
-                //std::cout << "msg_push = " << msg.meta.push_op_num << ",sheet_push = " << channel_manage_sheet[msg.meta.sender].push_op_num << std::endl;
-                //drop_num++;
-                //std::cout << "drop_num = " << drop_num << std::endl;
-                continue;
-            }
-            auto iti = channel_manage_sheet[msg.meta.sender].item.find(msg.meta.key_end);
-            if(iti != channel_manage_sheet[msg.meta.sender].item.end()){
-                if(!channel_manage_sheet[msg.meta.sender].item[msg.meta.key_end]){
-                    //drop_num++;
-                    //std::cout << "channel["<< msg.meta.sender << "," << msg.meta.key_end << "] has closed!!!" << std::endl; 
-                    //std::cout << "drop_num = " << drop_num << std::endl;
-                    continue;
-                }
-            }
-        }
-    }
+	
     // For debug, drop received message
     if (ready_.load() && drop_rate_ > 0) {
       unsigned seed = time(NULL) + my_node_.id;

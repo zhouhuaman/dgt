@@ -210,7 +210,7 @@ class Van {
     int init_stage = 0;
 #ifdef DOUBLE_CHANNEL
 	std::mutex mu_;
-    std::unordered_map<int,Channel_MS> channel_manage_sheet;
+    
 #endif
 
     /**

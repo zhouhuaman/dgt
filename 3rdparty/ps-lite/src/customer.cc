@@ -67,12 +67,13 @@ void Customer::Receiving() {
 		   }
 		  
 	  } */
-    recv_handle_(recv);
-    if (!recv.meta.request) {
+    if (!recv.meta.request && recv.meta.first_key == recv.meta.key_end) {
       std::lock_guard<std::mutex> lk(tracker_mu_);
       tracker_[recv.meta.timestamp].second++;
       tracker_cond_.notify_all();
     }
+    recv_handle_(recv);
+    
   }
 }
 

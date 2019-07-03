@@ -410,19 +410,20 @@ class KVStoreDistServer {
 		//printf("response to %d:%d\n",req.sender,req.timestamp);
         static int msg_recv_num = 0;
         static int msg_totol_num = 0;
-        std::cout << "req.sender = " << req.sender << std::endl;
+        //std::cout << "req.sender = " << req.sender << std::endl;
         if(req.sender == 9){
             msg_recv_num ++;
             if(req.first_key == req.key_end){
                 msg_totol_num += req.key_end - req.key_begin;
-                if(msg_recv_num > 1000){
-                    std::cout << "msg loss rate = " << 1 - msg_recv_num/msg_totol_num;
+                if(msg_totol_num > 1000){
+                    
+                    std::cout << "msg loss rate = " << 1 - (float)msg_recv_num/msg_totol_num << std::endl;
                     msg_recv_num = 0;
                     msg_totol_num = 0;
                 }
             }
         }
-        if(req.channel == 0){
+        if(req.channel == 0 && req.first_key == req.key_end){ //just reponse last msg(flag msg)
             server->Response(req);
         } 
       }
@@ -517,7 +518,9 @@ class KVStoreDistServer {
       }
       for (const auto& req : update_buf->request) {
 		//printf("response to %d:%d\n",req.sender,req.timestamp);
-        server->Response(req);
+        if(req.first_key == req.key_end){    //just response last msg
+            server->Response(req);
+        }
       }
       update_buf->request.clear();
       if (has_multi_precision_copy(type)) CopyFromTo(stored, store_[key]);
@@ -776,7 +779,7 @@ class KVStoreDistServer {
     // TODO(mli) try to remove this CopyFrom
     response.vals.CopyFrom(static_cast<const char*>(stored.data().dptr_), len);
 #endif
-    server->Response(req_meta, response);
+    server->Response(req_meta, response);  //every pull(key) need response
     
   }
 
@@ -884,12 +887,14 @@ class KVStoreDistServer {
 				recv_blob = TBlob(reinterpret_cast<DType*>(tmp_val.data()), dshape, cpu::kDevMask);
 			  })
 			  NDArray recved = NDArray(recv_blob, 0);
-			  if (stored.is_none()) {
+			  if (stored.is_none()) {     //first push
 				// initialization
 				stored = NDArray(dshape, Context(), false,
 								 has_multi_precision_copy(type) ? mshadow::kFloat32 : type.dtype);
 				CopyFromTo(recved, &stored, 0);
-				server->Response(req_meta);
+              
+                server->Response(req_meta);
+                
 				if (has_multi_precision_copy(type)) {
 				  auto& stored_dtype = store_[key];
 				  stored_dtype = NDArray(dshape, Context(), false, type.dtype);
@@ -985,7 +990,7 @@ class KVStoreDistServer {
 			}
 		  
 		} else {
-		 
+		  //pull
 		  DefaultStorageResponse(type, req_data.keys[0], req_meta, req_data, server);
 		 
 		}

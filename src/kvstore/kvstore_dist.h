@@ -35,7 +35,7 @@
 
 #define FINE_GRAIN_MSG
 #ifdef FINE_GRAIN_MSG
-#define MAX_MSG_LIMIT 4*1024
+#define MAX_MSG_LIMIT 1*1024
 #endif
 namespace mxnet {
 namespace kvstore {
@@ -62,6 +62,8 @@ class KVStoreDist : public KVStoreLocal {
     }
     bigarray_bound_ = dmlc::GetEnv("MXNET_KVSTORE_BIGARRAY_BOUND", 1000 * 1000);
     log_verbose_ = dmlc::GetEnv("MXNET_KVSTORE_DIST_ROW_SPARSE_VERBOSE", false);
+    msg_size_limit = dmlc::GetEnv("DGT_MSG_SIZE_LIMIT", 4 * 1024);
+    std::cout << "msg_size_limit = " << msg_size_limit << std::endl;
   }
 
   virtual ~KVStoreDist() {
@@ -572,7 +574,7 @@ class KVStoreDist : public KVStoreLocal {
 		int k = 0;
 		int tmp_len;
 		while(remain_bytes != 0){
-			tmp_len = std::min(remain_bytes,MAX_MSG_LIMIT);
+			tmp_len = std::min(remain_bytes,msg_size_limit);
 			pskv.keys.push_back(ps_key+k);
 			pskv.lens.push_back(tmp_len);
 			pskv.size += tmp_len;
@@ -602,7 +604,7 @@ class KVStoreDist : public KVStoreLocal {
 		int k = 0;
 		int tmp_len;
 		while(remain_bytes != 0){
-			tmp_len = std::min(remain_bytes,MAX_MSG_LIMIT);
+			tmp_len = std::min(remain_bytes,msg_size_limit);
 			pskv.keys.push_back(ps_key+k);
 			pskv.lens.push_back(tmp_len);
 			pskv.size += tmp_len;
@@ -794,6 +796,7 @@ class KVStoreDist : public KVStoreLocal {
    * \brief threshold for partition
    */
   size_t bigarray_bound_;
+  int msg_size_limit;
   /**
    * \brief buffer for non-compressed data.
    * When gradient compression is active, this is used
