@@ -497,34 +497,10 @@ int SendMsg(Message& msg) override {
 	  // task
       UnpackMeta(buf+addr_offset, meta_size, &(msg->meta));
 	  //decide drop the msg or not*****************************************
-    if(my_node_.role == 0 && msg->meta.push){
-        auto it = channel_manage_sheet.find(msg->meta.sender);
-        if(it != channel_manage_sheet.end()){
-            if(msg->meta.push_op_num < channel_manage_sheet[msg->meta.sender].push_op_num){
-                //std::cout << "msg_push = " << msg.meta.push_op_num << ",sheet_push = " << channel_manage_sheet[msg.meta.sender].push_op_num << std::endl;
-                //drop_num++;
-                //std::cout << "drop_num = " << drop_num << std::endl;
-                continue;
-            }
-            auto iti = channel_manage_sheet[msg->meta.sender].item.find(msg->meta.key_end);
-            if(iti != channel_manage_sheet[msg->meta.sender].item.end()){
-                if(!channel_manage_sheet[msg->meta.sender].item[msg->meta.key_end]){
-                    //static int drop_num = 0;
-                    //drop_num++;
-                    //std::cout << "channel["<< msg->meta.sender << "," << msg->meta.key_end << "] has closed!!!" << std::endl; 
-                    //std::cout << "drop_num = " << drop_num << std::endl;
-                    continue;
-                }
-            }
-            
-        }
-    }
-    if(my_node_.role == 0 && msg->meta.push){  //server
-        if(msg->meta.first_key == msg->meta.key_end){
-        auto it = channel_manage_sheet.find(msg->meta.sender);
-        if(it != channel_manage_sheet.end())
-            channel_manage_sheet[msg->meta.sender].item[msg->meta.key_end] = false;
-        }
+    if(my_node_.role == 0 && msg->meta.msg_type == 2){  //server
+       if(msg->meta.push_op_num < channel_manage_sheet[msg->meta.sender][msg->meta.first_key]){
+           continue;
+       }
     }
 	  //*************************************************************
 	 addr_offset += meta_size;
@@ -602,27 +578,15 @@ int RecvMsg_TCP(Message* msg) override {
       UnpackMeta(buf+addr_offset, meta_size, &(msg->meta));
       
 	  //*******************************************************channel manage
-      if(my_node_.role == 0 && msg->meta.push){  //server
-        
-        if(msg->meta.first_key == 0){ // this msg is a first push's msg of a new push
-            auto it = channel_manage_sheet.find(msg->meta.sender);
-            if(it == channel_manage_sheet.end()) {
-                Channel_MS tms;
-                channel_manage_sheet[msg->meta.sender] = tms;
-            }
-            channel_manage_sheet[msg->meta.sender].push_op_num += 1;
-            if(channel_manage_sheet[msg->meta.sender].item.size() != 0){
-                for(auto &i : channel_manage_sheet[msg->meta.sender].item){
-                    i.second = true;
-                }
+      if(my_node_.role == 0 && msg->meta.msg_type == 1){  //server)  //init channel manage
+            channel_manage_sheet[msg->meta.sender][msg->meta.first_key] = msg->meta.push_op_num+1;  //init expect push_op_num
+        }
+      if(my_node_.role == 0 && msg->meta.msg_type == 2){  //server
+       
+            if(msg->meta.seq == msg->meta.seq_end){
+                channel_manage_sheet[msg->meta.sender][msg->meta.first_key] += 1;   //expect next push_op
             }
         }
-        if(msg->meta.first_key == msg->meta.key_end){
-            auto it = channel_manage_sheet.find(msg->meta.sender);
-            if(it != channel_manage_sheet.end())
-                channel_manage_sheet[msg->meta.sender].item[msg->meta.key_end] = false;
-        }
-    }
     //*******************************************************************************
 	  
 	 addr_offset += meta_size;
@@ -747,7 +711,7 @@ int RecvMsg(Message* msg) override {
   std::vector<void *> udp_receiver_vec;;
   void *udp_receiver_ = nullptr;
   bool identify_flag = false; //if or not read the identify already
-  std::unordered_map<int,Channel_MS> channel_manage_sheet;
+  std::unordered_map<int,std::unordered_map<int,int>> channel_manage_sheet;
 #endif
 #ifdef CHANNEL_LOG
   FILE *fp;

@@ -229,17 +229,17 @@ void Van::ProcessDataMsg(Message* msg) {
 	  } */
   
 #ifdef RECONSTRUCT //
-  if(my_node_.role == 0 && msg->meta.push && msg->meta.request){   //run only on server side
+  if(my_node_.role == 0 && msg->meta.msg_type == 2){   //run only on server side
       //std::cout << msg->DebugString() << std::endl;
-      msg_map[msg->meta.sender][msg->meta.key_end][msg->meta.first_key] = *msg;
+      msg_map[msg->meta.sender][msg->meta.first_key][msg->meta.seq] = *msg;
       
-      if(msg->meta.first_key == msg->meta.key_end){
-          std::cout << "key_end-------"<< msg->DebugString() << std::endl;
-          int total_bytes = msg->meta.val_bytes+msg->meta.vals_len;
+      if(msg->meta.seq == msg->meta.seq_end){
+          std::cout << "seq_end-------"<< msg->DebugString() << std::endl;
+          int total_bytes = msg->meta.total_bytes;
           char* buf = (char *)malloc(total_bytes);
           memset(buf,0,total_bytes);
-          
-          for(auto &m : msg_map[msg->meta.sender][msg->meta.key_end]){
+          std::cout << "[" << msg->meta.first_key << "] achieve rate = " << (float)msg_map[msg->meta.sender][msg->meta.first_key].size() / (msg->meta.seq_end + 1);
+          for(auto &m : msg_map[msg->meta.sender][msg->meta.first_key]){
               
             
             //std::cout << m.second.DebugString() << std::endl;
@@ -257,12 +257,11 @@ void Van::ProcessDataMsg(Message* msg) {
                         });
           rmsg.data.push_back(data);
           //free(buf);
-          *(int *)msg->data[2].data() = total_bytes;
           rmsg.data.push_back(msg->data[2]);
           std::cout << rmsg.DebugString() << std::endl;
           obj->Accept(rmsg);
           std::cout << "Success to summit a rmsg!" << std::endl;
-          msg_map[msg->meta.sender][msg->meta.key_end].clear();
+          msg_map[msg->meta.sender][msg->meta.first_key].clear();
       }
   }else{    //pull
     
@@ -925,14 +924,16 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   pb.set_recver(meta.recver);
   pb.set_first_key(meta.first_key);
   
-  pb.set_key_begin(meta.key_begin);
-  pb.set_key_end(meta.key_end);
+  pb.set_seq_begin(meta.seq_begin);
+  pb.set_seq_end(meta.seq_end);
+  pb.set_seq(meta.seq);
   pb.set_udp_reliable(meta.udp_reliable);
   pb.set_channel(meta.channel);
   for (auto v : meta.compr) pb.add_compr(v);
   pb.set_msg_type(meta.msg_type);
   pb.set_push_op(meta.push_op_num);
   pb.set_val_bytes(meta.val_bytes);
+  pb.set_total_bytes(meta.total_bytes);
 #endif
   pb.set_push(meta.push);
   pb.set_request(meta.request);
@@ -989,9 +990,9 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
   meta->sender = pb.sender();
   meta->recver = pb.recver();
   meta->first_key = pb.first_key();
-  
-  meta->key_begin = pb.key_begin();
-  meta->key_end = pb.key_end();
+  meta->seq = pb.seq();
+  meta->seq_begin = pb.seq_begin();
+  meta->seq_end = pb.seq_end();
   
   meta->udp_reliable = pb.udp_reliable();
   meta->channel = pb.channel();
@@ -1001,6 +1002,7 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
   meta->msg_type = pb.msg_type();
   meta->push_op_num = pb.push_op();
   meta->val_bytes = pb.val_bytes();
+  meta->total_bytes = pb.total_bytes();
 #endif
   meta->request = pb.request();
   meta->push = pb.push();

@@ -170,7 +170,7 @@ struct Meta {
   /** \brief default constructor */
 #ifdef UDP_CHANNEL
   Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
-           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),key_begin(0),key_end(0), udp_reliable(false),channel(0),msg_type(-1),val_bytes(0),sender(kEmpty), recver(kEmpty),
+           timestamp(kEmpty),keys_len(0),vals_len(0),lens_len(0),seq(0),seq_begin(0),seq_end(0), udp_reliable(false),channel(0),msg_type(-1),val_bytes(0), total_bytes(0),sender(kEmpty), recver(kEmpty),
            request(false), push(false), simple_app(false) {}
 #else
 	 Meta() : head(kEmpty), app_id(kEmpty), customer_id(kEmpty),
@@ -195,13 +195,15 @@ struct Meta {
 	ss << ", keys_len = " << keys_len;
 	ss << ", vals_len = " << vals_len;
 	ss << ", lens_len = " << lens_len;
-	ss << ", key_begin = " << key_begin;
-	ss << ", key_end = " << key_end;
+    ss << ", seq = " << seq;
+	ss << ", seq_begin = " << key_begin;
+	ss << ", seq_end = " << key_end;
 	ss << ", udp_reliable = " << udp_reliable;
     ss << ", channel = " << channel;
     ss << ", msg_type = " << msg_type;
     ss << ", push_op_num = " << push_op_num;
     ss << ", val_bytes = " << val_bytes;
+    ss << ", total_bytes = " << total_bytes;
     if(compr.size()){
         ss << ", compr = [";
         for(auto v : compr) ss << " " << v;
@@ -245,13 +247,15 @@ struct Meta {
   int vals_len;
   int lens_len;
   //std::vector<int> data_len;
-  int key_begin;
-  int key_end;
+  int seq;
+  int seq_begin;
+  int seq_end;
   bool udp_reliable;
   std::vector<float> compr;
   int msg_type;     //point that the type of msg, push:paramter: 1 gradient/update:2 pull: request:3 default:0
   int push_op_num;
   int val_bytes;
+  int total_bytes;
 #endif
 
   int channel;

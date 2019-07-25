@@ -65,12 +65,14 @@ message PBMeta {
    optional int32 keys_len = 15;
    optional int32 vals_len = 16;
    optional int32 lens_len = 17;
-   optional int32 key_begin = 18;
-   optional int32 key_end = 19;
+   optional int32 seq_begin = 18;
+   optional int32 seq_end = 19;
    optional bool udp_reliable = 20;
    optional int32 channel = 21;
    repeated float compr = 22;
    optional int32 msg_type = 23;
    optional int32 push_op = 24;
    optional int32 val_bytes = 25;
+   optional int32 seq = 26;
+   optional int32 total_bytes = 27;
 }

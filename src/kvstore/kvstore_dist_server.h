@@ -437,8 +437,38 @@ class KVStoreDistServer {
       stored.WaitToRead();
      
   }
-  
   inline void ApplyUpdates(const DataHandleType type, const int key,
+                           UpdateBuf *update_buf, ps::KVServer<char>* server) {
+    if (!sync_mode_ || update_buf->request.size() == (size_t) ps::NumWorkers()) {
+      // let the main thread to execute updater_, which is necessary for python
+      auto& stored = has_multi_precision_copy(type) ? store_realt_[key] : store_[key];
+      auto& update =  sync_mode_ ? update_buf->merged : update_buf->temp_array;
+      if (updater_) {
+        exec_.Exec([this, key, &update, &stored](){
+          CHECK(updater_);
+          updater_(key, update, &stored);
+        });
+      } else {
+        CHECK(sync_mode_) << "Updater needs to be set for async mode";
+        // if no updater, just copy
+        CopyFromTo(update_buf->merged, &stored);
+      }
+
+      if (log_verbose_)  {
+        LOG(INFO) << "sent response to " << update_buf->request.size() << " workers";
+      }
+      for (const auto& req : update_buf->request) {
+        server->Response(req);
+      }
+      update_buf->request.clear();
+      if (has_multi_precision_copy(type)) CopyFromTo(stored, store_[key]);
+      stored.WaitToRead();
+    } else {
+      update_buf->merged.WaitToRead();
+    }
+  }
+  
+  inline void ApplyUpdates_RESERVE(const DataHandleType type, const int key,
                            UpdateBuf *update_buf, ps::KVServer<char>* server) {
     if (!sync_mode_ || update_buf->request.size() == (size_t) ps::NumWorkers()) {
       // let the main thread to execute updater_, which is necessary for python
@@ -739,8 +769,26 @@ class KVStoreDistServer {
       RowSparsePullResponse(type, master_key, num_rows, req_meta, req_data, server);
     }
   }
-
   void DefaultStorageResponse(const DataHandleType type,
+                              const int key,
+                              const ps::KVMeta& req_meta,
+                              const ps::KVPairs<char> &req_data,
+                              ps::KVServer<char>* server) {
+    ps::KVPairs<char> response;
+    const NDArray& stored = store_[key];
+    CHECK(!stored.is_none()) << "init " << key << " first";
+
+    // as server returns when store_realt is ready in this case
+    if (has_multi_precision_copy(type)) stored.WaitToRead();
+
+    auto len = stored.shape().Size() * mshadow::mshadow_sizeof(stored.dtype());
+    response.keys = req_data.keys;
+    response.lens = {len};
+    // TODO(mli) try to remove this CopyFrom
+    response.vals.CopyFrom(static_cast<const char*>(stored.data().dptr_), len);
+    server->Response(req_meta, response);
+  }
+  void DefaultStorageResponse_RESERVE(const DataHandleType type,
                               const int key,
                               const ps::KVMeta& req_meta,
                               const ps::KVPairs<char> &req_data,
@@ -857,153 +905,10 @@ class KVStoreDistServer {
       DefaultStorageResponse(type, key, req_meta, req_data, server);
     }
   }
-
+  
   void DataHandleDefault(const DataHandleType type, const ps::KVMeta& req_meta,
                          const ps::KVPairs<char> &req_data,
                          ps::KVServer<char>* server) {
-	//std::lock_guard<std::mutex> lk(mu_);
-	/* static int count = 0;
-	count++;
-	printf("Enter DataHandleDefault %d\n",count); */
-#ifdef FINE_GRAIN_MSG
-	//CHECK_EQ(req_data.keys.size(),req_data.lens.size());
-	
-		//std::cout << req_meta.push << "req_data.kays.size: "<<req_data.keys.size() << "req_data.vals.size: "<< req_data.vals.size() << "req_data.lens.size:"<<req_data.lens.size() << std::endl;
-		// there used several WaitToRead, this is because \a recved's memory
-		// could be deallocated when this function returns. so we need to make sure
-		// the operators with \a NDArray are actually finished
-		if (req_meta.push) {
-		  //std::cout << "req_data_keys:" << req_data.keys << "req_data_lens:" << req_data.lens;
-		  CHECK_EQ(req_data.keys.size(),req_data.lens.size());
-		  size_t val_begin = 0, val_end = 0;
-		  for(size_t i = 0; i < req_data.keys.size(); i++){
-			  
-			  int key = req_data.keys[i];
-			  
-			  auto& stored = has_multi_precision_copy(type) ? store_realt_[key] : store_[key];
-			  size_t ds[] = {(size_t) req_data.lens[i] / mshadow::mshadow_sizeof(type.dtype)};
-			  TShape dshape(ds, ds + 1);
-			  TBlob recv_blob;
-			  ps::SArray<char> tmp_val;
-			  val_end += req_data.lens[i];
-			 
-			  tmp_val = req_data.vals.segment(val_begin,val_end);
-			  val_begin = val_end;
- 			  MSHADOW_REAL_TYPE_SWITCH(type.dtype, DType, {
-				recv_blob = TBlob(reinterpret_cast<DType*>(tmp_val.data()), dshape, cpu::kDevMask);
-			  })
-			  NDArray recved = NDArray(recv_blob, 0);
-			  if (stored.is_none()) {     //first push
-				// initialization
-				stored = NDArray(dshape, Context(), false,
-								 has_multi_precision_copy(type) ? mshadow::kFloat32 : type.dtype);
-				CopyFromTo(recved, &stored, 0);
-              
-                server->Response(req_meta);
-                
-				if (has_multi_precision_copy(type)) {
-				  auto& stored_dtype = store_[key];
-				  stored_dtype = NDArray(dshape, Context(), false, type.dtype);
-				  CopyFromTo(stored, stored_dtype);
-				  stored_dtype.WaitToRead();
-				}
-				stored.WaitToRead();
-				
-			  } else {
-				auto &updates = update_buf_[key];
-				if (sync_mode_ && updates.merged.is_none()) {
-				  updates.merged = NDArray(dshape, Context(), false,
-										   has_multi_precision_copy(type) ? mshadow::kFloat32 : type.dtype);
-#ifdef GRAD_RECOVERY_ON
-				  if (updates.temp_array.is_none()) {
-					  updates.temp_array = NDArray(dshape, Context(), false, mshadow::kFloat32);
-					  //tmep_array init to zeros array
-					  SampleUniform(0,0, &updates.temp_array);
-					}
-#endif
-				}
-				if (has_multi_precision_copy(type) && updates.temp_array.is_none()) {
-				  updates.temp_array = NDArray(dshape, Context(), false, mshadow::kFloat32);
-				}
-#ifdef RECV_RANDOM_DROP  //drop recv msg according some probability of 10%
-                srand((unsigned)time(NULL));
-                int rn = rand()%100;
-                if(rn < 20 && req_meta.first_key != req_meta.key_end){
-                    updates.request.push_back(req_meta);
-                    ApplyUpdates(type, key, &updates, server);
-                    continue;
-                }
-#endif
-                //std::cout << "server get key = " << req_meta.first_key << std::endl;
-                if(enable_dgt &&  req_meta.first_key != req_meta.key_end){ //zhongjian de baowen
-                    //do nothing
-                }else{
-                    //std::cout << "get an key_end" << std::endl;
-                    if (updates.request.empty()) {
-                      if (sync_mode_) {
-                        
-                        CopyFromTo(recved, updates.merged); //if every time set request.size to 0, every time exec copy.
-                        
-                      } else {
-                        if (has_multi_precision_copy(type)) {
-                          CopyFromTo(recved, updates.temp_array);
-                        } else {
-                          updates.temp_array = recved;
-                        }
-                      }
-                    } else {
-                      CHECK(sync_mode_);
-                      if (has_multi_precision_copy(type)) {
-                        CopyFromTo(recved, updates.temp_array);
-                        updates.merged += updates.temp_array;
-                      } else {
-                        updates.merged += recved;
-                      }
-                    }
-                }
-				
-				updates.request.push_back(req_meta);
-#ifdef SERVER_MLR
-                if(req_meta.first_key == req_meta.key_begin) arrive_rate[req_meta.timestamp] = 0.0;
-                arrive_rate[req_meta.timestamp] = (arrive_rate[req_meta.timestamp] * req_meta.tracker_num + 1)/ (float) req_meta.tracker_num;
-                if(req_meta.first_key != req_meta.key_end){
-                    ApplyUpdates(type, key, &updates, server);
-                    std::cout << "key = "<< req_meta.first_key <<"timestamp = " << req_meta.timestamp << "arrive_rate = " << arrive_rate[req_meta.timestamp] << std::endl;
-                    if(arrive_rate[req_meta.timestamp] > (1 - 0.1)){
-                        std::cout << "tried to update key_end" << std::endl;
-                        ApplyUpdates(type, req_meta.key_end, &update_buf_[req_meta.key_end], server);
-                    }
-                }else{
-                    std::cout << "key_end = "<< req_meta.first_key <<"timestamp = " << req_meta.timestamp << "arrive_rate = " << arrive_rate[req_meta.timestamp] << std::endl;
-                    if(arrive_rate[req_meta.timestamp] > (1 - 0.1)){
-                        std::cout << "get key_end, and arrive_rate satisfied" << std::endl;
-                        ApplyUpdates(type, key, &updates, server);
-                    }else{
-                        std::cout << "get key_end,but arrive_rate not satisfied" << std::endl;
-                    }
-                }
-#else
-                if(enable_dgt){
-                    ApplyUpdatesForDGT(type, key, &updates, server,recved);
-                }else{
-                    ApplyUpdates(type, key, &updates, server);
-                }
-                
-                
-#endif    
-                
-				
-				
-			  }
-			}
-		  
-		} else {
-		  //pull
-		  DefaultStorageResponse(type, req_data.keys[0], req_meta, req_data, server);
-		 
-		}
-	
-#else
 	// do some check
     CHECK_EQ(req_data.keys.size(), (size_t)1);
     if (req_meta.push) {
@@ -1070,7 +975,6 @@ class KVStoreDistServer {
     } else {
       DefaultStorageResponse(type, key, req_meta, req_data, server);
     }
-#endif
   }
 
   int DecodeKey(ps::Key key) {

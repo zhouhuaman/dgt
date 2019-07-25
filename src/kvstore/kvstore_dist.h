@@ -551,13 +551,13 @@ class KVStoreDist : public KVStoreLocal {
       CHECK_EQ(static_cast<size_t>(pskv.size), pskv_size)
         << "The value size cannot be changed " << pskv_size << ". Key is " << key;
     } else {
-#ifdef FINE_GRAIN_MSG
+/* #ifdef FINE_GRAIN_MSG
 	  if(key == 0){
 		  krs = ps::Postoffice::Get()->GetServerKeyRanges();
 	  }
-#else
+#else */
 	  auto krs = ps::Postoffice::Get()->GetServerKeyRanges();
-#endif
+//#endif
       const int num_servers = krs.size();
       CHECK_GT(num_servers, 0);
 	  
@@ -569,7 +569,7 @@ class KVStoreDist : public KVStoreLocal {
 		//std::cout << "["<< server <<"]" << krs[server].begin()<< "--"<< krs[server].end() << std::endl;
         ps::Key ps_key = krs[server].begin() + key;
         CHECK_LT(ps_key, krs[server].end());
-#ifdef FINE_GRAIN_MSG
+/* #ifdef FINE_GRAIN_MSG
 		int total_bytes = num_arr_elems * num_bytes;
        
 		int remain_bytes = total_bytes;
@@ -578,14 +578,7 @@ class KVStoreDist : public KVStoreLocal {
 		while(remain_bytes != 0){
 			tmp_len = std::min(remain_bytes,msg_size_limit);
 			pskv.keys.push_back(ps_key+k);
-#ifdef RECONSTRUCT
-            if(tmp_len == remain_bytes){
-                
-                pskv.lens.push_back(tmp_len);
-            }else{
-                pskv.lens.push_back(tmp_len);
-            }
-#else
+
             pskv.lens.push_back(tmp_len);
 #endif
 			pskv.size += tmp_len;
@@ -594,12 +587,12 @@ class KVStoreDist : public KVStoreLocal {
 		}
 		
 		krs[server] = ps::Range(krs[server].begin()+k,krs[server].end());
-#else
+#else */
         pskv.keys.push_back(ps_key);
         const int total_bytes = num_arr_elems * num_bytes;
         pskv.lens.push_back(total_bytes);
         pskv.size = total_bytes;
-#endif
+//#endif
       } else {
         // parition it to all servers
         pskv.size = 0;
@@ -609,7 +602,7 @@ class KVStoreDist : public KVStoreLocal {
             static_cast<size_t>(round(static_cast<double>(num_arr_elems)/num_servers*i));
           ps::Key ps_key = krs[i].begin() + key;
           CHECK_LT(ps_key, krs[i].end());
-#ifdef FINE_GRAIN_MSG
+/* #ifdef FINE_GRAIN_MSG
 		int total_bytes = part_size * num_bytes;
 		int remain_bytes = total_bytes;
 		int k = 0;
@@ -617,26 +610,20 @@ class KVStoreDist : public KVStoreLocal {
 		while(remain_bytes != 0){
 			tmp_len = std::min(remain_bytes,msg_size_limit);
 			pskv.keys.push_back(ps_key+k);
-#ifdef RECONSTRUCT
-            if(tmp_len == remain_bytes){
-                pskv.lens.push_back(total_bytes);
-            }else{
-                pskv.lens.push_back(tmp_len);
-            }
-#else
+
             pskv.lens.push_back(tmp_len);
-#endif  //
+
 			pskv.size += tmp_len;
 			remain_bytes -= tmp_len;
 			k++;
 		}
 		krs[i] = ps::Range(krs[i].begin()+k,krs[i].end());
-#else
+#else */
         pskv.keys.push_back(ps_key);
         const int total_bytes = part_size * num_bytes;
         pskv.lens.push_back(total_bytes);
         pskv.size = total_bytes;
-#endif
+//#endif
         }
       }
       CHECK_EQ(static_cast<size_t>(pskv.size), pskv_size);
