@@ -16,9 +16,9 @@
 /* #ifndef CHANNEL_MLR
 #define CHANNEL_MLR
 #endif */
-#ifndef ADAPTIVE_K
+/* #ifndef ADAPTIVE_K
 #define ADAPTIVE_K
-#endif
+#endif */
 namespace ps {
 
 /**
@@ -162,7 +162,7 @@ class Resender {
       auto key = msg.meta.control.msg_sig;
 	  //std::cout << "key " << key << "have acked" << "at role = " << van_->my_node().role << std::endl;
       auto it = send_buff_.find(key);
-#ifdef ADAPTIVE_K
+/* #ifdef ADAPTIVE_K
       Time now = Now();
       int meta_size= sizeof(it->second.msg.meta);
       int data_size=0;
@@ -175,9 +175,9 @@ class Resender {
       float tp = (meta_size+ data_size)*1000.0*1000.0/transfer_time;
       //std::cout << "throughput = " << tp << std::endl;
       throughput.push_back(tp);
-#endif
+#endif */
       if (it != send_buff_.end()) send_buff_.erase(it);
-      //std::cout << "send_buff_size= " << send_buff_.size() << std::endl;
+     // std::cout << "send_buff_size= " << send_buff_.size() << std::endl;
       
       mu_.unlock();
       return true;
@@ -197,6 +197,7 @@ class Resender {
       ack.meta.control.cmd = Control::ACK;
       ack.meta.control.msg_sig = key;
       van_->Send(ack,0,0);
+      //std::cout<< "send an ack--" << ack.DebugString() << std::endl;
       // warning
       //if (duplicated) LOG(WARNING) << "Duplicated message: " << msg.DebugString() << "key:" << key << "at role = " << van_->my_node().role << std::endl;
       return duplicated;
@@ -344,9 +345,9 @@ class Resender {
       Time now = Now();
       mu_.lock();
       
-      /* for (auto& it : send_buff_) {
+      for (auto& it : send_buff_) {
         if (it.second.send + Time(timeout_) * (1+it.second.num_retry) < now) {
-		  if(it.second.msg.data.size() > 0){
+		  /* if(it.second.msg.data.size() > 0){
 			  char* p_key = it.second.msg.data[0].data();
 			  if( *(uint64_t*)p_key!= it.second.msg.meta.first_key){
 				  std::cout << "AT"<<it.first<<"?find key error,correct it" << (SArray<Key>)it.second.msg.data[0] <<"-->" << it.second.msg.meta.first_key << std::endl;
@@ -356,20 +357,19 @@ class Resender {
 				  std::cout << "!correct completed, key = " << (SArray<Key>)it.second.msg.data[0] << std::endl;
 				 
 			}
-			}
+			} */
           resend.push_back(it.second.msg);
           ++it.second.num_retry;
-          /*LOG(WARNING) << van_->my_node().ShortDebugString()
-                       << ": Timeout to get the ACK message. Resend (retry="
-                       << it.second.num_retry << ") " << it.second.msg.DebugString();
+          //LOG(WARNING) << van_->my_node().ShortDebugString()
+                      // << ": Timeout to get the ACK message. Resend (retry="
+                      // << it.second.num_retry << ") " << it.second.msg.DebugString();
 		  
-		 // if(it.second.msg.data.size() > 0) std::cout<< "data.size = " << it.second.msg.data.size()<<" key=" << (SArray<Key>)it.second.msg.data[0] << "len = " << (SArray<int>)it.second.msg.data[2]<< std::endl;
+		 // if(it.second.msg.data.size() > 0) std::cout<< "data.size = " << it.second.msg.data.size()<<" key=" << (SArray<Key>)it.second.msg.data[0] << "len = " << (SArray<int>)it.second.msg.data[2]<< std::endl;*/
           //CHECK_LT(it.second.num_retry, max_num_retry_);
         }
-      }*/
+      }
       mu_.unlock();
-
-      //for (auto& msg : resend) van_->Send(msg,msg.meta.channel,0); */
+      for (auto& msg : resend) van_->Send(msg,msg.meta.channel,0); 
     }
   }
 #endif

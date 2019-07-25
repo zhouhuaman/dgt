@@ -221,13 +221,56 @@ void Van::ProcessDataMsg(Message* msg) {
   auto* obj = Postoffice::Get()->GetCustomer(app_id, customer_id, 5);
   CHECK(obj) << "timeout (5 sec) to wait App " << app_id << " customer " << customer_id \
     << " ready at " << my_node_.role;
-  	 if(msg->data.size() > 0){
+  	 /* if(msg->data.size() > 0){
 		  if(msg->data[0][0] > 100000){
 				std::cout << "Van->ProcessDataMsg#221:find error key" << msg->data[0] << msg->meta.DebugString() << std::endl;
 		   }
 		  
-	  }
+	  } */
+  
+#ifdef RECONSTRUCT //
+  if(my_node_.role == 0 && msg->meta.push && msg->meta.request){   //run only on server side
+      //std::cout << msg->DebugString() << std::endl;
+      msg_map[msg->meta.sender][msg->meta.key_end][msg->meta.first_key] = *msg;
+      
+      if(msg->meta.first_key == msg->meta.key_end){
+          std::cout << "key_end-------"<< msg->DebugString() << std::endl;
+          int total_bytes = msg->meta.val_bytes+msg->meta.vals_len;
+          char* buf = (char *)malloc(total_bytes);
+          memset(buf,0,total_bytes);
+          
+          for(auto &m : msg_map[msg->meta.sender][msg->meta.key_end]){
+              
+            
+            //std::cout << m.second.DebugString() << std::endl;
+            memcpy(buf+ m.second.meta.val_bytes,(char*) m.second.data[1].data(),m.second.meta.vals_len);
+          }
+          //std::cout << "over memcpy" << std::endl;
+          Message rmsg;
+          rmsg.meta = msg->meta;
+          rmsg.data.push_back(msg->data[0]);
+          SArray<char> data;
+          data.reset(buf, total_bytes, [rmsg](char* buf) {
+                        /* zmq_msg_close(zmsg);
+                        delete zmsg; */
+                        free(buf);
+                        });
+          rmsg.data.push_back(data);
+          //free(buf);
+          *(int *)msg->data[2].data() = total_bytes;
+          rmsg.data.push_back(msg->data[2]);
+          std::cout << rmsg.DebugString() << std::endl;
+          obj->Accept(rmsg);
+          std::cout << "Success to summit a rmsg!" << std::endl;
+          msg_map[msg->meta.sender][msg->meta.key_end].clear();
+      }
+  }else{    //pull
+    
+      obj->Accept(*msg);
+  }
+#else
   obj->Accept(*msg);
+#endif
 }
 
 void Van::ProcessAddNodeCommand(Message* msg, Meta* nodes, Meta* recovery_nodes) {
@@ -321,6 +364,11 @@ void Van::Start(int customer_id) {
         enable_encode = atoi(CHECK_NOTNULL(Environment::Get()->find("ENABLE_ENCODE")));
         std::cout << "enable_encode = " << enable_encode << std::endl;
 #endif
+#ifdef RECONSTRUCT
+       //msg_size_limit = dmlc::GetEnv("DGT_MSG_SIZE_LIMIT", 4 * 1024);
+       msg_size_limit = atoi(CHECK_NOTNULL(Environment::Get()->find("DGT_MSG_SIZE_LIMIT")));
+       std::cout << "msg_size_limit[in van.cc] = " << msg_size_limit << std::endl;
+#endif
       // cannot determine my id now, the scheduler will assign it later
       // set it explicitly to make re-register within a same process possible
       my_node_.id = Node::kEmpty;
@@ -395,7 +443,7 @@ void Van::Start(int customer_id) {
   if (init_stage == 1) {
     // resender
 #ifdef UDP_CHANNEL
-      int timeout = 100;
+      int timeout = 1000;
 	  std::cout << my_node_.role << ":" << "start resender_" << std::endl;
       resender_ = new Resender(timeout, 10, this);
 #ifdef CHANNEL_MLR
@@ -584,7 +632,7 @@ int Van::Send( Message& msg, int channel, int tag) {
       
 	  if(msg.meta.udp_reliable){
 		  if (resender_) {
-		  //std::cout << "Van::Send, record outgoing msg" << std::endl;
+		  std::cout << "Van::Send, record outgoing msg" << std::endl;
           
 		  resender_->AddOutgoing(msg);
 
@@ -674,6 +722,9 @@ void Van::Receiving_TCP() {
 		if (resender_ && resender_->AddIncomming_Push(msg)) continue;
 	}  */
     /*server run*/
+     /* if(msg.meta.udp_reliable){
+        LOG(WARNING) <<"in tcp" <<msg.DebugString();
+    } */
     if(msg.meta.push && msg.meta.request){
         //std::cout << "get a push&& request msg" << std::endl;
         if(msg.meta.udp_reliable){
@@ -685,7 +736,7 @@ void Van::Receiving_TCP() {
         //std::cout << "get an  ACK" << std::endl;
 		if (resender_ && resender_->AddIncomming(msg)) continue;
 	}
-
+   
 	if (!msg.meta.control.empty()) {
       // control msg
       auto& ctrl = msg.meta.control;
@@ -774,7 +825,10 @@ void Van::Receiving_UDP(int channel) {
 		  udp_rcv_msg_cnt = 0;
 	  } */
     // duplicated message
-    //LOG(WARNING) << msg.DebugString();
+    //std::cout << msg.DebugString() << std::endl;
+    /* if(msg.meta.udp_reliable){
+        LOG(WARNING) << msg.DebugString();
+    } */
 	if(msg.meta.control.cmd == Control::ACK || msg.meta.udp_reliable){
 		if (resender_ && resender_->AddIncomming(msg)) continue;
 	}
@@ -878,6 +932,7 @@ void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   for (auto v : meta.compr) pb.add_compr(v);
   pb.set_msg_type(meta.msg_type);
   pb.set_push_op(meta.push_op_num);
+  pb.set_val_bytes(meta.val_bytes);
 #endif
   pb.set_push(meta.push);
   pb.set_request(meta.request);
@@ -945,6 +1000,7 @@ void Van::UnpackMeta(const char* meta_buf, int buf_size, Meta* meta) {
     }
   meta->msg_type = pb.msg_type();
   meta->push_op_num = pb.push_op();
+  meta->val_bytes = pb.val_bytes();
 #endif
   meta->request = pb.request();
   meta->push = pb.push();

@@ -188,7 +188,10 @@ class Van {
 #ifdef ADAPTIVE_K
     unsigned long monitor_count = 0;
 #endif
-
+#ifdef RECONSTRUCT
+    std::unordered_map<int,std::unordered_map<int, std::unordered_map<int,Message>>> msg_map;
+    int msg_size_limit = 4096;
+#endif
 #ifdef DOUBLE_CHANNEL
 	 /** the thread for receiving tcp messages */
     std::unique_ptr<std::thread> tcp_receiver_thread_;

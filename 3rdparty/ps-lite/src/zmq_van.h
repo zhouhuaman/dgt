@@ -342,13 +342,10 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
 	//std::cout << "#175:SendMsg" << std::endl;
 	addr_offset += meta_size;
 	for(int i = 0; i < n; ++i){
-		SArray<char>* data = new SArray<char>(msg.data[i]);
-		//assert(data->size()==msg.meta.data_len[i]);
-		//std::cout << "207:addr_offset = " << addr_offset << "data->size = " << data->size()<< std::endl;
-		memcpy(send_buf+addr_offset, data->data(), data->size());
-		//std::cout << "#181:SendMsg" << std::endl;
-		addr_offset += data->size();
-		delete data;
+		//SArray<char>* data = new SArray<char>(msg.data[i]);
+		memcpy(send_buf+addr_offset, msg.data[i].data(), msg.data[i].size());
+		addr_offset += msg.data[i].size();
+		//delete data;
 	}
 	assert(tot_bytes == addr_offset);
 	zmq_msg_t data_msg;
@@ -361,7 +358,7 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
                      << "] errno: " << errno << " " << zmq_strerror(errno);
         return -1;
       }
-	
+	//free(send_buf);
 	send_bytes = tot_bytes;
     return send_bytes;
   }
@@ -398,11 +395,11 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
 	memcpy(send_buf+addr_offset, meta_buf, meta_size);
 	addr_offset += meta_size;
 	for(int i = 0; i < n; ++i){
-		SArray<char>* data = new SArray<char>(msg.data[i]);
+		//SArray<char>* data = new SArray<char>(msg.data[i]);
 		
-		memcpy(send_buf+addr_offset, data->data(), data->size());
-		addr_offset += data->size();
-		delete data;
+		memcpy(send_buf+addr_offset, msg.data[i].data(), msg.data[i].size());
+		addr_offset += msg.data[i].size();
+		//delete data;
 	}
 	assert(tot_bytes == addr_offset);
 	zmq_msg_t data_msg;
@@ -415,6 +412,7 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
                      << "] errno: " << errno << " " << zmq_strerror(errno);
         return -1;
       }
+    //free(send_buf);
 	send_bytes = tot_bytes;
     return send_bytes;
   }
@@ -518,6 +516,14 @@ int SendMsg(Message& msg) override {
                     continue;
                 }
             }
+            
+        }
+    }
+    if(my_node_.role == 0 && msg->meta.push){  //server
+        if(msg->meta.first_key == msg->meta.key_end){
+        auto it = channel_manage_sheet.find(msg->meta.sender);
+        if(it != channel_manage_sheet.end())
+            channel_manage_sheet[msg->meta.sender].item[msg->meta.key_end] = false;
         }
     }
 	  //*************************************************************
@@ -538,21 +544,22 @@ int SendMsg(Message& msg) override {
 				msg->data.push_back(data);
 				addr_offset += msg->meta.vals_len;
 				data.reset(buf+addr_offset, msg->meta.lens_len, [zmsg, size](char* buf) {
-					zmq_msg_close(zmsg);
-					delete zmsg;
+					/* zmq_msg_close(zmsg);
+					delete zmsg; */
 				});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.lens_len;
 			}else{
 				data.reset(buf+addr_offset, msg->meta.vals_len, [zmsg, size](char* buf) {
-					zmq_msg_close(zmsg);
-					delete zmsg;
+					/* zmq_msg_close(zmsg);
+					delete zmsg; */
 					});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.vals_len;
 			}	   
 	    }	
-		
+	  zmq_msg_close(zmsg);
+      delete zmsg;
 	  break;
     }
     
@@ -593,6 +600,7 @@ int RecvMsg_TCP(Message* msg) override {
 	  addr_offset += sizeof(meta_size);
 	  // task
       UnpackMeta(buf+addr_offset, meta_size, &(msg->meta));
+      
 	  //*******************************************************channel manage
       if(my_node_.role == 0 && msg->meta.push){  //server
         
@@ -634,26 +642,29 @@ int RecvMsg_TCP(Message* msg) override {
 				msg->data.push_back(data);
 				addr_offset += msg->meta.vals_len;
 				data.reset(buf+addr_offset, msg->meta.lens_len, [zmsg, size](char* buf) {
-					zmq_msg_close(zmsg);
-					delete zmsg;
+					/* zmq_msg_close(zmsg);
+					delete zmsg; */
 				});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.lens_len;
 			}else{
 				data.reset(buf+addr_offset, msg->meta.vals_len, [zmsg, size](char* buf) {
-					zmq_msg_close(zmsg);
-					delete zmsg;
+					/* zmq_msg_close(zmsg);
+					delete zmsg; *///
 					});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.vals_len;
 			}	   
-	    }	
+	    }
 		if (!zmq_msg_more(zmsg)) { identify_flag = false; }
-	  break;
+        zmq_msg_close(zmsg);
+        delete zmsg;
+        break;
     }
     
     return recv_bytes;
   }
+  
 #else
 /*old version RecvMsg*/
 int RecvMsg(Message* msg) override {

@@ -37,6 +37,7 @@
 #ifdef FINE_GRAIN_MSG
 #define MAX_MSG_LIMIT 1*1024
 #endif
+
 namespace mxnet {
 namespace kvstore {
 
@@ -569,14 +570,24 @@ class KVStoreDist : public KVStoreLocal {
         ps::Key ps_key = krs[server].begin() + key;
         CHECK_LT(ps_key, krs[server].end());
 #ifdef FINE_GRAIN_MSG
-		const int total_bytes = num_arr_elems * num_bytes;
+		int total_bytes = num_arr_elems * num_bytes;
+       
 		int remain_bytes = total_bytes;
 		int k = 0;
 		int tmp_len;
 		while(remain_bytes != 0){
 			tmp_len = std::min(remain_bytes,msg_size_limit);
 			pskv.keys.push_back(ps_key+k);
-			pskv.lens.push_back(tmp_len);
+#ifdef RECONSTRUCT
+            if(tmp_len == remain_bytes){
+                
+                pskv.lens.push_back(tmp_len);
+            }else{
+                pskv.lens.push_back(tmp_len);
+            }
+#else
+            pskv.lens.push_back(tmp_len);
+#endif
 			pskv.size += tmp_len;
 			remain_bytes -= tmp_len;
 			k++;
@@ -599,14 +610,22 @@ class KVStoreDist : public KVStoreLocal {
           ps::Key ps_key = krs[i].begin() + key;
           CHECK_LT(ps_key, krs[i].end());
 #ifdef FINE_GRAIN_MSG
-		const int total_bytes = part_size * num_bytes;
+		int total_bytes = part_size * num_bytes;
 		int remain_bytes = total_bytes;
 		int k = 0;
 		int tmp_len;
 		while(remain_bytes != 0){
 			tmp_len = std::min(remain_bytes,msg_size_limit);
 			pskv.keys.push_back(ps_key+k);
-			pskv.lens.push_back(tmp_len);
+#ifdef RECONSTRUCT
+            if(tmp_len == remain_bytes){
+                pskv.lens.push_back(total_bytes);
+            }else{
+                pskv.lens.push_back(tmp_len);
+            }
+#else
+            pskv.lens.push_back(tmp_len);
+#endif  //
 			pskv.size += tmp_len;
 			remain_bytes -= tmp_len;
 			k++;

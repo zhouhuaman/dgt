@@ -72,4 +72,5 @@ message PBMeta {
    repeated float compr = 22;
    optional int32 msg_type = 23;
    optional int32 push_op = 24;
+   optional int32 val_bytes = 25;
 }

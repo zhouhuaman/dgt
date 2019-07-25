@@ -115,6 +115,10 @@ class KVWorker : public SimpleApp {
     obj_ = new Customer(app_id, customer_id, std::bind(&KVWorker<Val>::Process, this, _1));
     contri_alpha = dmlc::GetEnv("DGT_CONTRI_ALPHA", 0.3);
     std::cout << "contri_alpha = " << contri_alpha << std::endl;
+    set_random = dmlc::GetEnv("DGT_SET_RANDOM", 0);
+    dgt_info = dmlc::GetEnv("DGT_INFO", 0);
+    std::cout << "set_random = " << set_random << "dgt_info = "<<dgt_info<< std::endl;
+    
   }
 
   /** \brief deconstructor */
@@ -231,6 +235,7 @@ class KVWorker : public SimpleApp {
     kvs.keys = keys;
     kvs.vals = vals;
     kvs.lens = lens;
+    std::cout << "push keys:" << kvs.keys << std::endl;
     Send(ts, true, cmd, kvs);
     return ts;
   }
@@ -332,6 +337,8 @@ class KVWorker : public SimpleApp {
   std::unordered_map<int, float> pre_max_N;
   float max_N = 0.0;
   float contri_alpha = 0.3;
+  int set_random = 0;
+  int dgt_info = 0;
   float p_N = 0.0;
   float max_contri = 0.0;
   std::unordered_map<int, float> pre_max_contri;
@@ -504,6 +511,13 @@ void KVServer<Val>::Process(const Message& msg) {
   static int count = 0;
   count++;
   //std::cout << "Enter KVServer::Process: " << count << std::endl;
+  std::cout << "data.keys=" << data.keys <<","<<msg.meta.push << "," << msg.meta.request << std::endl;
+  //std::cout << msg.DebugString() << "keys " << *(uint64_t *)msg.data[0].data() << std::endl;
+  if(data.keys[0] != meta.first_key){
+        std::cout << data.keys << "--->" << meta.first_key;
+        data.keys[0] = (uint64_t)meta.first_key;
+        
+    }
   request_handle_(meta, data, this);
 }
 
@@ -588,7 +602,7 @@ void KVWorker<Val>::DefaultSlicer(
 	} */
 //#else
   sliced->resize(ranges.size());
-
+  
   // find the positions in msg.key
   size_t n = ranges.size();
   std::vector<size_t> pos(n+1);
@@ -609,8 +623,9 @@ void KVWorker<Val>::DefaultSlicer(
     sliced->at(i).first = (len != 0);
   }
   CHECK_EQ(pos[n], send.keys.size());
+  
   if (send.keys.empty()) return;
-
+     
   // the length of value
   size_t k = 0, val_begin = 0, val_end = 0;
   if (send.lens.empty()) {
@@ -619,13 +634,14 @@ void KVWorker<Val>::DefaultSlicer(
   } else {
     CHECK_EQ(send.keys.size(), send.lens.size());
   }
-
+  
   // slice
   for (size_t i = 0; i < n; ++i) {
     if (pos[i+1] == pos[i]) {
       sliced->at(i).first = false;
       continue;
     }
+    
     sliced->at(i).first = true;
     auto& kv = sliced->at(i).second;
     kv.keys = send.keys.segment(pos[i], pos[i+1]);
@@ -637,7 +653,9 @@ void KVWorker<Val>::DefaultSlicer(
     } else {
       kv.vals = send.vals.segment(pos[i]*k, pos[i+1]*k);
     }
+  
   }
+   
 //#endif
 }
 #ifdef EVAL_CONTRIBUTE_CON
@@ -661,7 +679,7 @@ void KVWorker<Val>::Update_loss_delta() {
         //std::cout << "loss = " << cur_loss << std::endl;
         fseek(fp,0,0);
     }
-    std::cout << "cur_loss = " << cur_loss << std::endl;
+    //std::cout << "cur_loss = " << cur_loss << std::endl;
     if(pre_loss != 0){
         delta_l = pre_loss - cur_loss;
     }else{
@@ -775,9 +793,10 @@ int KVWorker<Val>::Get_channel(int index, int max_index, int C, float k) {
         }
         
     }
-    return 0;
+    srand((unsigned)time(NULL));
+    //int rn = rand();
+    return rand()%C+1;
     //return rn%7 + 1;
-   
 }
 #ifdef ADAPTIVE_K
 template <typename Val>
@@ -795,19 +814,41 @@ float KVWorker<Val>::adaptive_k(){
 }
 #endif
 #endif
+#ifdef PARAM_
+template <typename Val>
+std::vector<Message> KVWorker<Val>::split_msg(Message& msg){
+    int key = msg.meta.first_key;
+    int len = *(int *)msg.data[2].data();
+    float p = (float*)msg.data[1].data();
+    auto it  = contri_vec.find(key);
+    if(it == contri_vec.end()){
+        std::vector<int> l(len,0);
+        contri_vec[key] = l;
+    }
+    for(int i = 0; i < len; ++i){
+        contri_vec[key] += contri_alpha*contri_vec[key] + (1-contri_alpha)*fabs(*(p+i));
+    }
+      
+}
+#endif
 template <typename Val>
 void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& kvs) {
   // slice the message
+  
   SlicedKVs sliced;
   slicer_(kvs, Postoffice::Get()->GetServerKeyRanges(), &sliced);
-
-
+  
+  
 #ifndef LITTLE_GRAIN_MSG
   // need to add response first, since it will not always trigger the callback
   int skipped = 0;
   for (size_t i = 0; i < sliced.size(); ++i) {
-    if (!sliced[i].first) ++skipped;
+    if (!sliced[i].first) {
+        ++skipped;
+        
+    }
   }
+  
   obj_->AddResponse(timestamp, skipped);
   if ((size_t)skipped == sliced.size()) {
     RunCallback(timestamp);
@@ -819,12 +860,11 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
     if (!s.first) continue;
 #ifdef LITTLE_GRAIN_MSG
 	unsigned int send_bytes = 0;
-	int tcp_tag = ZMQ_SNDMORE;
-	int udp_tag = 0;
 	const auto& tmp_kvs = s.second;
 	size_t n = tmp_kvs.keys.size();
 	size_t val_begin = 0, val_end = 0;
 	size_t k = tmp_kvs.vals.size() / tmp_kvs.keys.size();
+    int val_bytes = 0;
 	for (size_t j = 0; j < n; ++j) {
 		Message msg;
 		msg.meta.app_id = obj_->app_id();
@@ -842,7 +882,9 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 		KVPairs<char> tmp_kv;
 		tmp_kv.keys = tmp_kvs.keys.segment(j,j+1);
 		msg.meta.first_key = tmp_kv.keys[0];
+        msg.meta.val_bytes = val_bytes;
 		if (tmp_kvs.lens.size()) {
+            
 			tmp_kv.lens = tmp_kvs.lens.segment(j,j+1);
 			val_end += tmp_kvs.lens[j];
 			tmp_kv.vals = tmp_kvs.vals.segment(val_begin, val_end);
@@ -862,8 +904,11 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 
 #ifdef UDP_CHANNEL
 		 msg.meta.vals_len = msg.data.back().size();
+         val_bytes += msg.meta.vals_len;
+         
 #endif
 		  if (tmp_kv.lens.size()) {
+          
 			msg.AddData(tmp_kv.lens);
 #ifdef UDP_CHANNEL
 			msg.meta.lens_len = msg.data.back().size();
@@ -871,6 +916,7 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 			
 		  }
 		}
+        
 		/* clock_t start_time, end_time;
 		if(j == 0){
 			start_time = clock();
@@ -924,7 +970,8 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                     }else{
                         dmlc_k = dmlc_k_init;
                     }
-                    std::cout << "dmlc_k = " << dmlc_k << std::endl;
+                    if(dgt_info)
+                        std::cout << "dmlc_k = " << dmlc_k << std::endl;
 #endif
                 }
                 msg.contri = Evaluate_msg_contri(tmp_kv, msg);
@@ -947,9 +994,14 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
         /* std::sort(msg_vector.begin(),msg_vector.end()-1,[](const Message& msg1, const Message& msg2){
             return msg1.contri > msg2.contri;
         }); */
-        std::sort(rank_vector.begin(),rank_vector.end(),[](const Message_RU& mru1, const Message_RU& mru2){
-            return mru1.contri > mru2.contri;
-        });
+        if(set_random){
+            auto engine = std::default_random_engine{};
+            std::shuffle(std::begin(rank_vector), std::end(rank_vector), engine);
+        }else{
+            std::sort(rank_vector.begin(),rank_vector.end(),[](const Message_RU& mru1, const Message_RU& mru2){
+                return mru1.contri > mru2.contri;
+            });
+        }
         for(int r=0; r < rank_vector.size(); ++r){
             //std::cout << "index = " << rank_vector[r].index << ",rank = " << r << std::endl;
             msg_vector[rank_vector[r].index].rank = r;
@@ -975,10 +1027,17 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
             ch = Get_channel(msg_vector[j].rank, msg_vector.size()-1, udp_channel_num, dmlc_k);
            
             msg_vector[j].meta.channel = ch;
-            if(msg_vector[j].meta.first_key == 0 || msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) msg_vector[j].meta.channel=0;
+            //std::cout << "channel = " << msg_vector[j].meta.channel << std::endl;
+            if(set_random){
+                if(msg_vector[j].meta.first_key == 0) msg_vector[j].meta.channel=0;
+                //if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) msg_vector[j].meta.udp_reliable=1;
+                if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) msg_vector[j].meta.channel=0;
+            }else{
+                if(msg_vector[j].meta.first_key == 0 || msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) msg_vector[j].meta.channel=0;
+            }
             if(msg_vector[j].meta.channel == 0){
-               tag = ZMQ_SNDMORE;
-               //tag = 0;
+               //tag = ZMQ_SNDMORE;
+               tag = 0;
                if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) tag = 0;
             }
     
@@ -987,24 +1046,65 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
             if(enable_send_drop && msg_vector[j].meta.channel != 0){
                 continue;
             }
-               
+            std::cout << msg_vector[j].DebugString()<< std::endl;
+            if(msg_vector[j].meta.first_key == 2100) std::cout << msg_vector[j].DebugString()<< std::endl;
+            if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) {
+                  std::cout << "come here!!" << std::endl;
+                  std::cout << msg_vector[j].DebugString()<< std::endl;
+            }
+              
             Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
             
-            /* struct timespec req;
+            struct timespec req;
             req.tv_sec = 0;
-            req.tv_nsec = 100;
-            nanosleep(&req,NULL); */
+            req.tv_nsec = 1;
+            nanosleep(&req,NULL);
         }
         msg_vector.clear();
     }else{
+#ifdef RECONSTRUCT
+        if(msg_vector[0].meta.push && is_first_push_op){    //first push
+            for(size_t j = 0; j < msg_vector.size(); ++j){
+                //int tag = ZMQ_SNDMORE;
+                int tag = 0;
+                if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end){
+                    tag = 0;
+                    
+                  //std::cout << "come here!!" << std::endl;
+                  std::cout << msg_vector[j].DebugString()<< std::endl;
+            
+                } 
+                msg_vector[j].meta.channel = 0;
+               
+                Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
+            }
+            msg_vector.clear();
+        }else if(!msg_vector[0].meta.push){              //every pull
+            for(size_t j = 0; j < msg_vector.size(); ++j){
+                
+                if(msg_vector[j].meta.first_key != msg_vector[j].meta.key_end){
+                    continue;
+                } 
+                int tag = 0;
+                msg_vector[j].meta.channel = 0;
+                Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
+            }
+            msg_vector.clear();
+        }
+#else
         for(size_t j = 0; j < msg_vector.size(); ++j){
             int tag = ZMQ_SNDMORE;
             //int tag = 0;
-            if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end) tag = 0;
+            if(msg_vector[j].meta.first_key == msg_vector[j].meta.key_end){
+                tag = 0;
+
+            } 
             msg_vector[j].meta.channel = 0;
+            
             Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
         }
         msg_vector.clear();
+#endif
     }
 #endif
         
@@ -1070,6 +1170,7 @@ void KVWorker<Val>::Process(const Message& msg) {
     if (msg.data.size() > (size_t)2) {
       kvs.lens = msg.data[2];
     }
+    
     mu_.lock();
     recv_kvs_[ts].push_back(kvs);
     mu_.unlock();
@@ -1096,6 +1197,7 @@ void KVWorker<Val>::Process(const Message& msg) {
         } */
         
         //}
+        //std::cout << "get key_end push response!!" << std::endl;
 		RunCallback(ts);
 		}
 	}else{
@@ -1103,7 +1205,7 @@ void KVWorker<Val>::Process(const Message& msg) {
 		RunCallback(ts);
 		}
 	}
-	
+	//
 #else
   if (obj_->NumResponse(ts) == Postoffice::Get()->num_servers())  {
     RunCallback(ts);
@@ -1142,7 +1244,13 @@ int KVWorker<Val>::Pull_(
 
       // do check
       size_t total_key = 0, total_val = 0;
-      for (const auto& s : kvs) {
+      std::cout << "keys:" << keys << std::endl;
+      for (auto& s : kvs) {
+        std::cout << s.keys << std::endl;
+        if(s.keys[0] != keys.back()){
+            std::cout << s.keys[0] << "--->" << keys.back() << std::endl;//
+            s.keys[0] = keys.back();
+        }
         Range range = FindRange(keys, s.keys.front(), s.keys.back()+1);
         CHECK_EQ(range.size(), s.keys.size())
             << "unmatched keys size from one server" << keys <<"("<<range.begin() << "," << range.end() << ")"<<s.keys;
@@ -1154,7 +1262,7 @@ int KVWorker<Val>::Pull_(
         total_val += s.vals.size();
       }
 	  
-      CHECK_EQ(total_key, keys.size()) << "lost some servers?";
+      //CHECK_EQ(total_key, keys.size()) << "lost some servers?";
 
       // fill vals and lens
       std::sort(kvs.begin(), kvs.end(), [](

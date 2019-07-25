@@ -181,7 +181,8 @@ class KVStoreDistServer {
     log_verbose_ = dmlc::GetEnv("MXNET_KVSTORE_DIST_ROW_SPARSE_VERBOSE", false);
 #ifdef FINE_GRAIN_MSG
     enable_dgt = dmlc::GetEnv("ENABLE_DGT", false);
-    std::cout << "enable_dgt = " << enable_dgt << std::endl;
+    dgt_info = dmlc::GetEnv("DGT_INFO", false);
+    std::cout << "enable_dgt = " << enable_dgt << "dgt_info = " << dgt_info << std::endl;
 #endif
   }
 
@@ -408,22 +409,26 @@ class KVStoreDistServer {
       }
       for (const auto& req : update_buf->request) {
 		//printf("response to %d:%d\n",req.sender,req.timestamp);
-        static int msg_recv_num = 0;
-        static int msg_totol_num = 0;
-        //std::cout << "req.sender = " << req.sender << std::endl;
-        if(req.sender == 9){
-            msg_recv_num ++;
-            if(req.first_key == req.key_end){
-                msg_totol_num += req.key_end - req.key_begin;
-                if(msg_totol_num > 1000){
-                    
-                    std::cout << "msg loss rate = " << 1 - (float)msg_recv_num/msg_totol_num << std::endl;
-                    msg_recv_num = 0;
-                    msg_totol_num = 0;
+        if(dgt_info){
+            static int msg_recv_num = 0;
+            static int msg_totol_num = 0;
+            //std::cout << "req.sender = " << req.sender << std::endl;
+            if(req.sender == 9){
+                msg_recv_num ++;
+                if(req.first_key == req.key_end){
+                    msg_totol_num += req.key_end - req.key_begin;
+                    if(msg_totol_num > 1000){
+                        
+                        std::cout << "msg loss rate = " << 1 - (float)msg_recv_num/msg_totol_num << std::endl;
+                        msg_recv_num = 0;
+                        msg_totol_num = 0;
+                    }
                 }
             }
         }
-        if(req.channel == 0 && req.first_key == req.key_end){ //just reponse last msg(flag msg)
+        //
+        //if(req.channel == 0 && req.first_key == req.key_end){ //just reponse last msg(flag msg)
+        if(req.first_key == req.key_end){
             server->Response(req);
         } 
       }
@@ -749,6 +754,7 @@ class KVStoreDistServer {
 	for(size_t i = 0; i < req_data.keys.size(); i++){
 		
 		int tmp_key = req_data.keys[i];
+       
 		const NDArray& stored = store_[tmp_key];
 		CHECK(!stored.is_none()) << "init " << tmp_key << " first";
 
@@ -908,7 +914,7 @@ class KVStoreDistServer {
 				if (sync_mode_ && updates.merged.is_none()) {
 				  updates.merged = NDArray(dshape, Context(), false,
 										   has_multi_precision_copy(type) ? mshadow::kFloat32 : type.dtype);
-#ifdef GRAD_RECOVERY
+#ifdef GRAD_RECOVERY_ON
 				  if (updates.temp_array.is_none()) {
 					  updates.temp_array = NDArray(dshape, Context(), false, mshadow::kFloat32);
 					  //tmep_array init to zeros array
@@ -928,9 +934,11 @@ class KVStoreDistServer {
                     continue;
                 }
 #endif
+                //std::cout << "server get key = " << req_meta.first_key << std::endl;
                 if(enable_dgt &&  req_meta.first_key != req_meta.key_end){ //zhongjian de baowen
                     //do nothing
                 }else{
+                    //std::cout << "get an key_end" << std::endl;
                     if (updates.request.empty()) {
                       if (sync_mode_) {
                         
@@ -1092,6 +1100,7 @@ class KVStoreDistServer {
   std::unordered_map<int, UpdateBuf> update_buf_;
 #ifdef FINE_GRAIN_MSG
     bool enable_dgt  = 0;
+    bool dgt_info = 0;
 #endif
 #ifdef SERVER_MLR
     std::unordered_map<int,float> arrive_rate;
