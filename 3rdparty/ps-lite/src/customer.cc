@@ -57,10 +57,12 @@ void Customer::Receiving() {
   while (true) {
     Message recv;
     recv_queue_.WaitAndPop(&recv);
+    //std::cout <<"IN Receiving:" << recv.DebugString() << std::endl;
     if (!recv.meta.control.empty() &&
         recv.meta.control.cmd == Control::TERMINATE) {
       break;
     }
+    
 	 /* if(recv.data.size() > 0){
 		  if(recv.data[0][0] > 100000){
 				std::cout << "Customer->Receiving#66:find error key" << recv.data[0] << recv.meta.DebugString() << std::endl;

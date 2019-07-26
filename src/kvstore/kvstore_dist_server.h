@@ -365,78 +365,7 @@ class KVStoreDistServer {
   inline bool has_multi_precision_copy(const DataHandleType type) {
     return multi_precision_ && type.dtype != mshadow::kFloat32;
   }
-  inline void ApplyUpdatesForDGT(const DataHandleType type, const int key,
-                           UpdateBuf *update_buf, ps::KVServer<char>* server, NDArray &recved) {
-                             
-    
-      // let the main thread to execute updater_, which is necessary for python
-      auto& stored = has_multi_precision_copy(type) ? store_realt_[key] : store_[key];
-      auto& update =  sync_mode_ ? update_buf->merged : update_buf->temp_array;
-      if (updater_) {
-        exec_.Exec([this, key, &update, &stored](){
-          CHECK(updater_);
-          updater_(key, update, &stored);    
-        });
-		
-      } else {
-        CHECK(sync_mode_) << "Updater needs to be set for async mode";  //default,update_ is copy update to stored.
-        // if no updater, just copy
-        //std::cout << "key = " << key << "key_end = " << update_buf->request[update_buf->request.size()-1].key_end << std::endl;
-        if(key == update_buf->request[update_buf->request.size()-1].key_end){  // if is the last key
-            
-            if(!sync_mode_ || update_buf->request.size() == (size_t) ps::NumWorkers()){   //must get all worker's end key
-                
-                CopyFromTo(update_buf->merged, &stored);
-                update_buf->update_num += 1;
-            }else{
-                update_buf->merged.WaitToRead();
-                return;  //do nothing
-            }
-            
-        }else{
-            if(update_buf->update_num == 0){   //is first update in this round on the key
-                CopyFromTo(recved, &stored);
-            }else{
-                stored += recved;
-            }
-            update_buf->update_num += 1;  
-        }
-        
-      }
-
-      if (log_verbose_)  {
-        LOG(INFO) << "sent response to " << update_buf->request.size() << " workers";
-      }
-      for (const auto& req : update_buf->request) {
-		//printf("response to %d:%d\n",req.sender,req.timestamp);
-        if(dgt_info){
-            static int msg_recv_num = 0;
-            static int msg_totol_num = 0;
-            //std::cout << "req.sender = " << req.sender << std::endl;
-            if(req.sender == 9){
-                msg_recv_num ++;
-                if(req.first_key == req.key_end){
-                    msg_totol_num += req.key_end - req.key_begin;
-                    if(msg_totol_num > 1000){
-                        
-                        std::cout << "msg loss rate = " << 1 - (float)msg_recv_num/msg_totol_num << std::endl;
-                        msg_recv_num = 0;
-                        msg_totol_num = 0;
-                    }
-                }
-            }
-        }
-        //
-        //if(req.channel == 0 && req.first_key == req.key_end){ //just reponse last msg(flag msg)
-        if(req.first_key == req.key_end){
-            server->Response(req);
-        } 
-      }
-      update_buf->request.clear();
-      if (has_multi_precision_copy(type)) CopyFromTo(stored, store_[key]);
-      stored.WaitToRead();
-     
-  }
+  
   inline void ApplyUpdates(const DataHandleType type, const int key,
                            UpdateBuf *update_buf, ps::KVServer<char>* server) {
     if (!sync_mode_ || update_buf->request.size() == (size_t) ps::NumWorkers()) {
@@ -468,102 +397,7 @@ class KVStoreDistServer {
     }
   }
   
-  inline void ApplyUpdates_RESERVE(const DataHandleType type, const int key,
-                           UpdateBuf *update_buf, ps::KVServer<char>* server) {
-    if (!sync_mode_ || update_buf->request.size() == (size_t) ps::NumWorkers()) {
-      // let the main thread to execute updater_, which is necessary for python
-      auto& stored = has_multi_precision_copy(type) ? store_realt_[key] : store_[key];
-      auto& update =  sync_mode_ ? update_buf->merged : update_buf->temp_array;
-      if (updater_) {
-        exec_.Exec([this, key, &update, &stored](){
-          CHECK(updater_);
-          updater_(key, update, &stored);
-        });
-		
-      } else {
-        CHECK(sync_mode_) << "Updater needs to be set for async mode";
-        // if no updater, just copy
-        CopyFromTo(update_buf->merged, &stored);
-      }
-#ifdef GRAD_RECOVERY_ON
-      update_buf->update_num += 1;
-	  /* CopyFromTo(update_buf->merged, update_buf->temp_array);
-	  update_buf->temp_array.WaitToRead(); */
-	  if(!update_buf->request.empty() && key == update_buf->request[0].key_end){
-		  // find the last key and check if some key haven't updated
-		  int key_begin = update_buf->request[0].key_begin;
-		  int key_end = update_buf->request[0].key_end;
-		  for(int i = key_begin; i<key_end; ++i){
-			  auto &tmp_update_buf = update_buf_[i];
-			  auto& tmp_stored = has_multi_precision_copy(type) ? store_realt_[i] : store_[i];
-			  if(tmp_update_buf.update_num < update_buf->update_num){
-				  //means the key i haven't updated
-				  //if the first grad push haven't came in, then .merged is none and .temp_array is none
-				  if (sync_mode_ && tmp_update_buf.merged.is_none()) {
-					  tmp_update_buf.merged = NDArray(tmp_stored.shape(), Context(), false,
-											   has_multi_precision_copy(type) ? mshadow::kFloat32 : type.dtype);
-					}
-				   if (tmp_update_buf.temp_array.is_none()) {
-					  tmp_update_buf.temp_array = NDArray(tmp_stored.shape(), Context(), false, mshadow::kFloat32);
-					  //tmep_array init to zeros array
-					  SampleUniform(0,0, &tmp_update_buf.temp_array);
-					}
-					//int lost_worker_num = (size_t) ps::NumWorkers() - tmp_update_buf.request.size();
-					//for(int j = 0; j < lost_worker_num; ++j){
-                    /* if(tmp_update_buf.request.size() == 0){
-                        CopyFromTo(tmp_update_buf.temp_array, tmp_update_buf.merged);
-                        tmp_update_buf.merged.WaitToRead();
-                        //continue;
-                    } */
-						/* tmp_update_buf.merged += tmp_update_buf.temp_array;
-						tmp_update_buf.merged.WaitToRead(); */
-					//}
-					//std::cout << "key = " << i << "lost_worker_num = " << lost_worker_num << std::endl;
-					//now .merged is complete, can be updated.
-					
-				    auto& tmp_update =  tmp_update_buf.merged;
-					if (updater_) {
-						exec_.Exec([this, i, &tmp_update, &tmp_stored](){
-						  CHECK(updater_);
-						  updater_(i, tmp_update, &tmp_stored);
-						});
-					}else{
-                        CHECK(sync_mode_) << "Updater needs to be set for async mode";
-                        // if no updater, just copy
-                        CopyFromTo(tmp_update_buf.merged, &tmp_stored);
-                    }
-					//then temp_array = merge/num_worker
-					
-					/* CopyFromTo(tmp_update_buf.merged, tmp_update_buf.temp_array);
-					tmp_update_buf.temp_array.WaitToRead(); */ 
-					tmp_update_buf.update_num += 1;
-                    for (const auto& req : tmp_update_buf.request) {
-                        //printf("response to %d:%d\n",req.sender,req.timestamp);
-                        server->Response(req);
-                      }
-					tmp_update_buf.request.clear();
-		
-			  }
-			  
-		  }
-	  }
-#endif 
-      if (log_verbose_)  {
-        LOG(INFO) << "sent response to " << update_buf->request.size() << " workers";
-      }
-      for (const auto& req : update_buf->request) {
-		//printf("response to %d:%d\n",req.sender,req.timestamp);
-        if(req.first_key == req.key_end){    //just response last msg
-            server->Response(req);
-        }
-      }
-      update_buf->request.clear();
-      if (has_multi_precision_copy(type)) CopyFromTo(stored, store_[key]);
-      stored.WaitToRead();
-    } else {
-      update_buf->merged.WaitToRead();
-    }
-  }
+  
 
   void DecodeRowIds(const ps::SArray<ps::Key> &keys, int64_t *indices,
                     const int64_t master_key, const int64_t num_rows) {
@@ -788,54 +622,7 @@ class KVStoreDistServer {
     response.vals.CopyFrom(static_cast<const char*>(stored.data().dptr_), len);
     server->Response(req_meta, response);
   }
-  void DefaultStorageResponse_RESERVE(const DataHandleType type,
-                              const int key,
-                              const ps::KVMeta& req_meta,
-                              const ps::KVPairs<char> &req_data,
-                              ps::KVServer<char>* server) {
-    ps::KVPairs<char> response;
-	/* static int count = 0;
-	count++;
-	printf("Enter DefaultStorageResponse %d\n",count); */
-#ifdef FINE_GRAIN_MSG
-	//std::cout << "kvstore_dist_server#591 " << req_data.keys << std::endl;
-	for(size_t i = 0; i < req_data.keys.size(); i++){
-		
-		int tmp_key = req_data.keys[i];
-       
-		const NDArray& stored = store_[tmp_key];
-		CHECK(!stored.is_none()) << "init " << tmp_key << " first";
-
-		// as server returns when store_realt is ready in this case
-		if (has_multi_precision_copy(type)) stored.WaitToRead();
-
-		auto len = stored.shape().Size() * mshadow::mshadow_sizeof(stored.dtype());
-		ps::SArray<char> tmp_val;
-		tmp_val.resize(len);
-		tmp_val.CopyFrom(static_cast<const char*>(stored.data().dptr_), len);	
-		response.vals.append(tmp_val);
-		response.lens.push_back(len);
-		// TODO(mli) try to remove this CopyFrom
-        if(enable_dgt) update_buf_[tmp_key].update_num = 0;    //means last round push is completed.
-	}
-	response.keys = req_data.keys;
-	 
-#else
-    const NDArray& stored = store_[key];
-    CHECK(!stored.is_none()) << "init " << key << " first";
-
-    // as server returns when store_realt is ready in this case
-    if (has_multi_precision_copy(type)) stored.WaitToRead();
-
-    auto len = stored.shape().Size() * mshadow::mshadow_sizeof(stored.dtype());
-    response.keys = req_data.keys;
-    response.lens = {len};
-    // TODO(mli) try to remove this CopyFrom
-    response.vals.CopyFrom(static_cast<const char*>(stored.data().dptr_), len);
-#endif
-    server->Response(req_meta, response);  //every pull(key) need response
-    
-  }
+ 
 
   void DataHandleCompressed(const DataHandleType type,
                             const ps::KVMeta& req_meta,

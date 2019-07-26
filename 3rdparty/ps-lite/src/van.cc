@@ -227,27 +227,51 @@ void Van::ProcessDataMsg(Message* msg) {
 		   }
 		  
 	  } */
-  
+  //std::cout << msg->DebugString() << std::endl;
+  /* static int cn = 0;
+  static int ct = 0; */
 #ifdef RECONSTRUCT //
   if(my_node_.role == 0 && msg->meta.msg_type == 2){   //run only on server side
       //std::cout << msg->DebugString() << std::endl;
       msg_map[msg->meta.sender][msg->meta.first_key][msg->meta.seq] = *msg;
       
       if(msg->meta.seq == msg->meta.seq_end){
-          std::cout << "seq_end-------"<< msg->DebugString() << std::endl;
+          //std::cout << "seq_end-------"<< msg->DebugString() << std::endl;
           int total_bytes = msg->meta.total_bytes;
           char* buf = (char *)malloc(total_bytes);
           memset(buf,0,total_bytes);
-          std::cout << "[" << msg->meta.first_key << "] achieve rate = " << (float)msg_map[msg->meta.sender][msg->meta.first_key].size() / (msg->meta.seq_end + 1);
+          //std::cout << "[" << msg->meta.first_key << "] achieve rate = " << (float)msg_map[msg->meta.sender][msg->meta.first_key].size() / (msg->meta.seq_end + 1) << std::endl;
+          /* ct += msg->meta.seq_end + 1;
+          cn += msg_map[msg->meta.sender][msg->meta.first_key].size();
+          if(ct > 1000){
+              std::cout << "msg avg loss rate = " << 1 - (float) cn / ct << std::endl;
+              ct = 0;
+              cn = 0;
+          } */
           for(auto &m : msg_map[msg->meta.sender][msg->meta.first_key]){
               
-            
+  
             //std::cout << m.second.DebugString() << std::endl;
+            
             memcpy(buf+ m.second.meta.val_bytes,(char*) m.second.data[1].data(),m.second.meta.vals_len);
           }
           //std::cout << "over memcpy" << std::endl;
           Message rmsg;
           rmsg.meta = msg->meta;
+          /* rmsg.meta.app_id = msg->meta.app_id;
+        rmsg.meta.customer_id = msg->meta.customer_id;
+        rmsg.meta.request =  msg->meta.request;
+        rmsg.meta.push =  msg->meta.push;
+        rmsg.meta.head = msg->meta.head;
+        rmsg.meta.timestamp = msg->meta.timestamp;
+        rmsg.meta.recver = msg->meta.recver;
+        rmsg.meta.msg_type = msg->meta.msg_type;
+        rmsg.meta.push_op_num = msg->meta.push_op_num;
+        rmsg.meta.total_bytes = msg->meta.total_bytes;
+        rmsg.meta.first_key =  msg->meta.first_key;
+        rmsg.meta.seq = msg->meta.seq;
+        rmsg.meta.seq_begin = msg->meta.seq_begin;
+        rmsg.meta.seq_end = msg->meta.seq_end; */
           rmsg.data.push_back(msg->data[0]);
           SArray<char> data;
           data.reset(buf, total_bytes, [rmsg](char* buf) {
@@ -258,9 +282,9 @@ void Van::ProcessDataMsg(Message* msg) {
           rmsg.data.push_back(data);
           //free(buf);
           rmsg.data.push_back(msg->data[2]);
-          std::cout << rmsg.DebugString() << std::endl;
+          //std::cout << rmsg.DebugString() << std::endl;
           obj->Accept(rmsg);
-          std::cout << "Success to summit a rmsg!" << std::endl;
+          //std::cout << "Success to summit a rmsg!" << std::endl;
           msg_map[msg->meta.sender][msg->meta.first_key].clear();
       }
   }else{    //pull
@@ -268,6 +292,7 @@ void Van::ProcessDataMsg(Message* msg) {
       obj->Accept(*msg);
   }
 #else
+  
   obj->Accept(*msg);
 #endif
 }
@@ -401,7 +426,7 @@ void Van::Start(int customer_id) {
 #ifdef DOUBLE_CHANNEL
    // start tcp receiver
     tcp_receiver_thread_ = std::unique_ptr<std::thread>(
-            new std::thread(&Van::Receiving_TCP, this));
+            new std::thread(&Van::Receiving, this));
     if(!is_scheduler_){
         // start udp receiver
         for(int i = 0; i < my_node_.udp_port.size(); ++i){
@@ -616,7 +641,7 @@ int Van::Send( Message& msg, int channel, int tag) {
           monitor_count++;
       } */ 
 #endif
-	  send_bytes = SendMsg_TCP(msg, tag);
+	  send_bytes = SendMsg(msg);
 
   }else{
 #ifdef CHANNEL_MLR   
@@ -682,7 +707,7 @@ int Van::Send( Message& msg) {
 #endif
 
 /*if DOUBLE_CHANNEL, Receiving => Receiving_TCP and Receiving_UDP*/
-#ifdef DOUBLE_CHANNEL
+
 void Van::Receiving_TCP() {
   Meta nodes;
   Meta recovery_nodes;  // store recovery nodes
@@ -854,7 +879,7 @@ void Van::Receiving_UDP(int channel) {
     }
   }
 }
-#else
+
 /*old version Receiving*/
 void Van::Receiving() {
   Meta nodes;
@@ -881,7 +906,7 @@ void Van::Receiving() {
     }
 	
     // duplicated message
-    if (resender_ && resender_->AddIncomming(msg)) continue;
+    //if (resender_ && resender_->AddIncomming(msg)) continue;
 
 	if (!msg.meta.control.empty()) {
       // control msg
@@ -905,7 +930,7 @@ void Van::Receiving() {
     }
   }
 }
-#endif
+
 void Van::PackMeta(const Meta& meta, char** meta_buf, int* buf_size) {
   // convert into protobuf
   PBMeta pb;

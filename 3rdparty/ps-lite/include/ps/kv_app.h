@@ -118,7 +118,7 @@ class KVWorker : public SimpleApp {
     set_random = dmlc::GetEnv("DGT_SET_RANDOM", 0);
     dgt_info = dmlc::GetEnv("DGT_INFO", 0);
     std::cout << "set_random = " << set_random << "dgt_info = "<<dgt_info<< std::endl;
-    init_dgt();
+//init_dgt();
   }
 
   /** \brief deconstructor */
@@ -235,7 +235,6 @@ class KVWorker : public SimpleApp {
     kvs.keys = keys;
     kvs.vals = vals;
     kvs.lens = lens;
-    std::cout << "push keys:" << kvs.keys << std::endl;
     Send(ts, true, cmd, kvs);
     return ts;
   }
@@ -478,23 +477,13 @@ void KVServer<Val>::Process(const Message& msg) {
   if (msg.meta.simple_app) {
     SimpleApp::Process(msg); return;
   }
+  //std::cout << msg.DebugString() << std::endl;
   KVMeta meta;
   meta.cmd       = msg.meta.head;
   meta.push      = msg.meta.push;
   meta.sender    = msg.meta.sender;
   meta.timestamp = msg.meta.timestamp;
-/* #ifdef LITTLE_GRAIN_MSG
-  meta.tracker_num = msg.meta.tracker_num;
-#endif */
-/* #ifdef UDP_CHANNEL
-  meta.first_key = msg.meta.first_key;
-  meta.keys_len = msg.meta.keys_len;
-  meta.vals_len = msg.meta.vals_len;
-  meta.lens_len = msg.meta.lens_len;
-  meta.channel = msg.meta.channel;
-#endif */
   meta.customer_id = msg.meta.customer_id;
-  //printf("#Process 387:timestamp = %d,meta.tracker_num = %d\n",meta.timestamp,meta.tracker_num);
   KVPairs<Val> data;
   int n = msg.data.size();
   if (n) {
@@ -507,16 +496,9 @@ void KVServer<Val>::Process(const Message& msg) {
       CHECK_EQ(data.lens.size(), data.keys.size());
     }
   }
-  CHECK(request_handle_);
   
-  //std::cout << "Enter KVServer::Process: " << count << std::endl;
-  std::cout << "data.keys=" << data.keys <<","<<msg.meta.push << "," << msg.meta.request << std::endl;
-  //std::cout << msg.DebugString() << "keys " << *(uint64_t *)msg.data[0].data() << std::endl;
- /*  if(data.keys[0] != meta.first_key){
-        std::cout << data.keys << "--->" << meta.first_key;
-        data.keys[0] = (uint64_t)meta.first_key;
-        
-    } */
+  CHECK(request_handle_);
+  //std::cout << "data.keys=" << msg.meta.first_key <<","<<msg.meta.push << "," << msg.meta.request << std::endl;
   request_handle_(meta, data, this);
 }
 template <typename Val>
@@ -834,14 +816,7 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
 	
     const auto& s = sliced[i];
     if (!s.first) continue;
-    Message msg;
-    msg.meta.app_id = obj_->app_id();
-    msg.meta.customer_id = obj_->customer_id();
-    msg.meta.request     = true;
-    msg.meta.push        = push;
-    msg.meta.head        = cmd;
-    msg.meta.timestamp   = timestamp;
-    msg.meta.recver      = Postoffice::Get()->ServerRankToID(i);
+    
     const auto& kvs = s.second;
     if(push){
         if(kvs.keys[0] == 0){
@@ -856,9 +831,20 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                 }
                 if(dgt_info)
                     std::cout << "dmlc_k = " << dmlc_k << std::endl;
+            }else{
+                init_dgt();
             }
+            
         }
         if(push_op_num == 1){     //first push
+            Message msg;
+            msg.meta.app_id = obj_->app_id();
+            msg.meta.customer_id = obj_->customer_id();
+            msg.meta.request     = true;
+            msg.meta.push        = push;
+            msg.meta.head        = cmd;
+            msg.meta.timestamp   = timestamp;
+            msg.meta.recver      = Postoffice::Get()->ServerRankToID(i);
             msg.meta.msg_type = 1;
             msg.meta.first_key = kvs.keys[0];
             msg.meta.seq = 0;
@@ -881,21 +867,34 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
             
         }else{
             
-            msg.meta.msg_type = 2;
-            msg.meta.push_op_num = push_op_num;
+            
             
             int total_bytes = kvs.vals.size();
-            msg.meta.total_bytes = total_bytes;
+            
             int remain_bytes = total_bytes;
             int val_bytes = 0;
             int seq = 0;
             int seq_num = 0;
+            block_size = 4096;
             if(total_bytes % block_size == 0){
                 seq_num = total_bytes/block_size;
             }else{
                 seq_num = total_bytes/block_size + 1;
             }
+            
             while(remain_bytes != 0){
+                Message msg;
+                msg.meta.app_id = obj_->app_id();
+                msg.meta.customer_id = obj_->customer_id();
+                msg.meta.request     = true;
+                msg.meta.push        = push;
+                msg.meta.head        = cmd;
+                msg.meta.timestamp   = timestamp;
+                msg.meta.recver      = Postoffice::Get()->ServerRankToID(i);
+                msg.meta.msg_type = 2;
+                msg.meta.push_op_num = push_op_num;
+                msg.meta.total_bytes = total_bytes;
+                //std::cout << "enter while! seq = " << seq << std::endl;//
                 int l = std::min(remain_bytes,block_size);
                 SArray<Val> tmp_val = kvs.vals.segment(val_bytes, val_bytes+l);
                 msg.meta.val_bytes = val_bytes;
@@ -915,6 +914,7 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                   }
                 }
                 msg.contri = Evaluate_msg_contri((int)kvs.keys[0], msg);
+                //std::cout << msg.DebugString() << std::endl;
                 msg_vector.push_back(msg);
                 Message_RU mru;
                 mru.index = msg_vector.size()-1;
@@ -922,6 +922,8 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                 rank_vector.push_back(mru);
                 seq++;
                 remain_bytes -= l;
+                msg.data.clear();
+                //std::cout << "remain_bytes = " << remain_bytes << std::endl;
             
             }
             assert(seq == seq_num);
@@ -955,7 +957,7 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                     continue;
                 }
                 Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
-                
+                //Postoffice::Get()->van()->Send(msg_vector[j]); 
                 struct timespec req;
                 req.tv_sec = 0;
                 req.tv_nsec = 1;
@@ -965,6 +967,14 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
             
         }
     }else{                               //pull
+        Message msg;
+        msg.meta.app_id = obj_->app_id();
+        msg.meta.customer_id = obj_->customer_id();
+        msg.meta.request     = true;
+        msg.meta.push        = push;
+        msg.meta.head        = cmd;
+        msg.meta.timestamp   = timestamp;
+        msg.meta.recver      = Postoffice::Get()->ServerRankToID(i);
         msg.meta.msg_type = 3;
         msg.meta.first_key = kvs.keys[0];
         msg.meta.seq = 0;
@@ -1091,9 +1101,9 @@ int KVWorker<Val>::Pull_(
 
       // do check
       size_t total_key = 0, total_val = 0;
-      std::cout << "keys:" << keys << std::endl;
+      //std::cout << "keys:" << keys << std::endl;
       for (auto& s : kvs) {
-        std::cout << s.keys << std::endl;
+        //std::cout << s.keys << std::endl;
         /* if(s.keys[0] != keys.back()){
             std::cout << s.keys[0] << "--->" << keys.back() << std::endl;//
             s.keys[0] = keys.back();

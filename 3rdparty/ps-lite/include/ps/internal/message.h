@@ -196,8 +196,8 @@ struct Meta {
 	ss << ", vals_len = " << vals_len;
 	ss << ", lens_len = " << lens_len;
     ss << ", seq = " << seq;
-	ss << ", seq_begin = " << key_begin;
-	ss << ", seq_end = " << key_end;
+	ss << ", seq_begin = " << seq_begin;
+	ss << ", seq_end = " << seq_end;
 	ss << ", udp_reliable = " << udp_reliable;
     ss << ", channel = " << channel;
     ss << ", msg_type = " << msg_type;

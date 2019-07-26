@@ -307,7 +307,7 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
   }
   
 /*if DOUBLE_CHANNEL, SendMsg=> SendMsg_TCP and SendMsg_UDP*/
-#ifdef DOUBLE_CHANNEL
+
   int SendMsg_TCP(Message& msg, int tag) override {
     std::lock_guard<std::mutex> lk(mu_);
     // find the socket
@@ -416,7 +416,7 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
 	send_bytes = tot_bytes;
     return send_bytes;
   }
-#else
+
 /*ole version SendMsg*/
 int SendMsg(Message& msg) override {
     std::lock_guard<std::mutex> lk(mu_);
@@ -465,10 +465,10 @@ int SendMsg(Message& msg) override {
     }
     return send_bytes;
   }
-#endif
+
 
 /*if DOUBLE_CHANNEL, RecvMSG=> RecvMSG_TCP and RecvMSG_UDP*/
-#ifdef DOUBLE_CHANNEL
+
   int RecvMsg_UDP(int channel, Message* msg) override {
     msg->data.clear();
     size_t recv_bytes = 0;
@@ -499,13 +499,14 @@ int SendMsg(Message& msg) override {
 	  //decide drop the msg or not*****************************************
     if(my_node_.role == 0 && msg->meta.msg_type == 2){  //server
        if(msg->meta.push_op_num < channel_manage_sheet[msg->meta.sender][msg->meta.first_key]){
+       //std::cout << "actively drop [" << msg->meta.sender << "]," << "[" << msg->meta.first_key << "]"<< "[" << msg->meta.seq << "]" << std::endl;
            continue;
        }
     }
 	  //*************************************************************
 	 addr_offset += meta_size;
 	
-	 if(msg->meta.keys_len > 0){
+	 /* if(msg->meta.keys_len > 0){
 		   SArray<char> data;
 		   
 		   data.reset(buf+addr_offset, msg->meta.keys_len, [zmsg, size](char* buf) {
@@ -522,20 +523,66 @@ int SendMsg(Message& msg) override {
 				data.reset(buf+addr_offset, msg->meta.lens_len, [zmsg, size](char* buf) {
 					/* zmq_msg_close(zmsg);
 					delete zmsg; */
-				});
+				/*});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.lens_len;
 			}else{
 				data.reset(buf+addr_offset, msg->meta.vals_len, [zmsg, size](char* buf) {
 					/* zmq_msg_close(zmsg);
 					delete zmsg; */
-					});
+				/*	});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.vals_len;
 			}	   
-	    }	
-	  zmq_msg_close(zmsg);
+	    }	 */
+      if(msg->meta.keys_len > 0){
+          SArray<char> data;
+		   data.reset(buf+addr_offset, msg->meta.keys_len, [zmsg, size](char* buf) {
+            
+		   });
+		   msg->data.push_back(data);
+		   addr_offset += msg->meta.keys_len;
+      }
+      if(msg->meta.vals_len > 0){
+          SArray<char> data;
+		   data.reset(buf+addr_offset, msg->meta.vals_len, [zmsg, size](char* buf) {
+            
+		   });
+		   msg->data.push_back(data);
+		   addr_offset += msg->meta.vals_len;
+      }
+      if(msg->meta.lens_len > 0){
+          SArray<char> data;
+		   data.reset(buf+addr_offset, msg->meta.lens_len, [zmsg, size](char* buf) {
+            
+		   });
+		   msg->data.push_back(data);
+		   addr_offset += msg->meta.lens_len;
+      }
+      zmq_msg_close(zmsg);
       delete zmsg;
+      /* msg->meta.data_type.clear();
+      if(msg->meta.keys_len > 0){
+          SArray<uint64_t> keys(1);
+          keys[0] = (uint64_t)msg->meta.first_key;
+          msg->AddData(keys);
+          addr_offset += msg->meta.keys_len;
+      }
+      if(msg->meta.vals_len > 0){
+          SArray<char> data;
+		   data.reset(buf+addr_offset, msg->meta.vals_len, [zmsg, size](char* buf) {
+                 zmq_msg_close(zmsg);
+                 delete zmsg;
+		   });
+		   //msg->data.push_back(data);
+           msg->AddData(data);
+		   addr_offset += msg->meta.vals_len;
+      }
+	  if(msg->meta.lens_len > 0){
+          SArray<int> lens(1);
+          lens[0] = (int)msg->meta.total_bytes;
+          msg->AddData(lens);
+      } */
 	  break;
     }
     
@@ -578,7 +625,7 @@ int RecvMsg_TCP(Message* msg) override {
       UnpackMeta(buf+addr_offset, meta_size, &(msg->meta));
       
 	  //*******************************************************channel manage
-      if(my_node_.role == 0 && msg->meta.msg_type == 1){  //server)  //init channel manage
+     /*  if(my_node_.role == 0 && msg->meta.msg_type == 1){  //server)  //init channel manage
             channel_manage_sheet[msg->meta.sender][msg->meta.first_key] = msg->meta.push_op_num+1;  //init expect push_op_num
         }
       if(my_node_.role == 0 && msg->meta.msg_type == 2){  //server
@@ -586,7 +633,7 @@ int RecvMsg_TCP(Message* msg) override {
             if(msg->meta.seq == msg->meta.seq_end){
                 channel_manage_sheet[msg->meta.sender][msg->meta.first_key] += 1;   //expect next push_op
             }
-        }
+        } */
     //*******************************************************************************
 	  
 	 addr_offset += meta_size;
@@ -629,13 +676,13 @@ int RecvMsg_TCP(Message* msg) override {
     return recv_bytes;
   }
   
-#else
+
 /*old version RecvMsg*/
 int RecvMsg(Message* msg) override {
     msg->data.clear();
 	//static unsigned int count = 0;
     size_t recv_bytes = 0;
-    for (int i = 0; ; ++i) {
+    for (int i = 0; ; ++i) { //
       zmq_msg_t* zmsg = new zmq_msg_t;
       CHECK(zmq_msg_init(zmsg) == 0) << zmq_strerror(errno);
       while (true) {
@@ -662,6 +709,17 @@ int RecvMsg(Message* msg) override {
         // task
         UnpackMeta(buf, size, &(msg->meta));
 		//std::cout << msg->meta.DebugString();
+        //*******************************************************channel manage
+      if(my_node_.role == 0 && msg->meta.msg_type == 1){  //server)  //init channel manage
+            channel_manage_sheet[msg->meta.sender][msg->meta.first_key] = msg->meta.push_op_num+1;  //init expect push_op_num
+        }
+      if(my_node_.role == 0 && msg->meta.msg_type == 2){  //server
+       
+            if(msg->meta.seq == msg->meta.seq_end){
+                channel_manage_sheet[msg->meta.sender][msg->meta.first_key] += 1;   //expect next push_op
+            }
+        }
+    //*******************************************************************************
         zmq_msg_close(zmsg);
         bool more = zmq_msg_more(zmsg);
         delete zmsg;
@@ -679,7 +737,7 @@ int RecvMsg(Message* msg) override {
     }
     return recv_bytes;
   }
-#endif
+
  private:
   /**
    * return the node id given the received identity

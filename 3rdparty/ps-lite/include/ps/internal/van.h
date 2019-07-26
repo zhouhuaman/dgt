@@ -121,27 +121,27 @@ class Van {
 	 virtual std::vector<int> Bind_UDP(const Node &node, int max_retry) = 0;
 #endif
 
-#ifdef DOUBLE_CHANNEL
+
 	virtual int RecvMsg_TCP(Message *msg) = 0;
 	virtual int RecvMsg_UDP(int channel, Message *msg) = 0;
-#else
+
     /**
      * \brief block until received a message
      * \return the number of bytes received. -1 if failed or timeout
      */
     virtual int RecvMsg(Message *msg) = 0;
-#endif
+
   
-#ifdef DOUBLE_CHANNEL
+
     virtual int SendMsg_UDP(int channel, Message &msg, int tag = 0) = 0;
 	virtual int SendMsg_TCP(Message &msg, int tag = 0) = 0;
-#else
+
 	 /**
      * \brief send a mesage
      * \return the number of bytes sent
      */
     virtual int SendMsg(Message &msg) = 0;
-#endif
+
     /**
      * \brief pack meta into a string
      */
@@ -162,12 +162,12 @@ class Van {
  private:
     /** thread function for receving */
 	/*if DOUBLE_CHANNEL, Receiving=> Receiving_TCP and  Receiving_UDP*/
-#ifdef DOUBLE_CHANNEL
+
 	void Receiving_TCP();
 	void Receiving_UDP(int channel);
-#else
+
     void Receiving();
-#endif
+
 
     /** thread function for heartbeat */
     void Heartbeat();
