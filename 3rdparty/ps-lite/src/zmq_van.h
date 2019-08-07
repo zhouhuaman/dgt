@@ -58,6 +58,8 @@ class ZMQVan : public Van {
     start_mu_.unlock();
     // zmq_ctx_set(context_, ZMQ_IO_THREADS, 4);
     Van::Start(customer_id);
+    enable_send_drop = atoi(CHECK_NOTNULL(Environment::Get()->find("DGT_ENABLE_SEND_DROP")));
+    std::cout << "enable_send_drop = " << enable_send_drop << std::endl;
   }
 
   void Stop() override {
@@ -268,6 +270,7 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
       zmq_setsockopt(sender, ZMQ_IDENTITY, my_id.data(), my_id.size());
       if(node.udp_port.size()!=0){
           int tos = node.udp_port.size()*32;
+          //int tos = 0;
           if(zmq_setsockopt(sender, ZMQ_TOS, &tos, sizeof(tos))==0){
               std::cout << "Successful to Set " << "tcp[" << 0 << "]:"<< my_node_.id << "=>" << node.id << "(" << node.hostname.c_str() << ":" << node.port << "):" << "tos=" << tos << std::endl;
               
@@ -405,7 +408,8 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
 	zmq_msg_t data_msg;
 	zmq_msg_init_data(&data_msg, send_buf, tot_bytes, FreeData_malloc, NULL);
 	zmq_msg_set_group (&data_msg, "GRADIENT");
-	while (true) {
+        
+	while (!enable_send_drop) {
         if (zmq_msg_send(&data_msg, socket, tag) == tot_bytes) break;
         if (errno == EINTR) continue;
         LOG(WARNING) << "udp:failed to send message to node [" << id
@@ -497,16 +501,18 @@ int SendMsg(Message& msg) override {
 	  // task
       UnpackMeta(buf+addr_offset, meta_size, &(msg->meta));
 	  //decide drop the msg or not*****************************************
-    if(my_node_.role == 0 && msg->meta.msg_type == 2){  //server
+    /* if(my_node_.role == 0 && msg->meta.msg_type == 2){  //server
        if(msg->meta.push_op_num < channel_manage_sheet[msg->meta.sender][msg->meta.first_key]){
        //std::cout << "actively drop [" << msg->meta.sender << "]," << "[" << msg->meta.first_key << "]"<< "[" << msg->meta.seq << "]" << std::endl;
+           zmq_msg_close(zmsg);
+		   delete zmsg;
            continue;
        }
-    }
+    } */
 	  //*************************************************************
 	 addr_offset += meta_size;
 	
-	 /* if(msg->meta.keys_len > 0){
+	 if(msg->meta.keys_len > 0){
 		   SArray<char> data;
 		   
 		   data.reset(buf+addr_offset, msg->meta.keys_len, [zmsg, size](char* buf) {
@@ -521,21 +527,21 @@ int SendMsg(Message& msg) override {
 				msg->data.push_back(data);
 				addr_offset += msg->meta.vals_len;
 				data.reset(buf+addr_offset, msg->meta.lens_len, [zmsg, size](char* buf) {
-					/* zmq_msg_close(zmsg);
-					delete zmsg; */
-				/*});
+					zmq_msg_close(zmsg);
+					delete zmsg;
+				});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.lens_len;
 			}else{
 				data.reset(buf+addr_offset, msg->meta.vals_len, [zmsg, size](char* buf) {
-					/* zmq_msg_close(zmsg);
-					delete zmsg; */
-				/*	});
+					 zmq_msg_close(zmsg);
+					delete zmsg;
+					});
 				msg->data.push_back(data);
 				addr_offset += msg->meta.vals_len;
 			}	   
-	    }	 */
-      if(msg->meta.keys_len > 0){
+	    }	
+      /* if(msg->meta.keys_len > 0){
           SArray<char> data;
 		   data.reset(buf+addr_offset, msg->meta.keys_len, [zmsg, size](char* buf) {
             
@@ -560,7 +566,7 @@ int SendMsg(Message& msg) override {
 		   addr_offset += msg->meta.lens_len;
       }
       zmq_msg_close(zmsg);
-      delete zmsg;
+      delete zmsg; */
       /* msg->meta.data_type.clear();
       if(msg->meta.keys_len > 0){
           SArray<uint64_t> keys(1);
@@ -769,6 +775,7 @@ int RecvMsg(Message* msg) override {
   std::vector<void *> udp_receiver_vec;;
   void *udp_receiver_ = nullptr;
   bool identify_flag = false; //if or not read the identify already
+  int enable_send_drop = 0;
   std::unordered_map<int,std::unordered_map<int,int>> channel_manage_sheet;
 #endif
 #ifdef CHANNEL_LOG

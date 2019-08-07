@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include "ps/base.h"
 #include "ps/internal/message.h"
+#include "customer.h"
 #ifndef ADAPTIVE_K
 #define ADAPTIVE_K
 #endif
@@ -65,6 +66,11 @@ class Van {
 #endif
     /*channel = 0 means tcp channel 1->udp channel tag = 0 means send imediately.*/
 	int Send(Message &msg, int channel = 0, int tag = 0);
+    int Classifier( Message& msg, int channel=0, int tag=0);
+    void Important_scheduler();
+    void Unimportant_scheduler();
+    int Important_send(Message& msg);
+    int Unimportant_send(Message& msg);
 #ifdef CHANNEL_MLR
     void Update_Sendbuff( int timestamp);
 #endif
@@ -191,6 +197,9 @@ class Van {
 #ifdef RECONSTRUCT
     std::unordered_map<int,std::unordered_map<int, std::unordered_map<int,Message>>> msg_map;
     int msg_size_limit = 4096;
+    int reconstruct = 0;
+    ThreadsafeQueue<Message> important_queue_;
+    ThreadsafeQueue<Message> unimportant_queue_;
 #endif
 #ifdef DOUBLE_CHANNEL
 	 /** the thread for receiving tcp messages */
@@ -200,6 +209,8 @@ class Van {
    
     std::unique_ptr<std::thread> udp_receiver_thread_[8];
     std::vector<std::unique_ptr<std::thread>> udp_receiver_thread_vec;
+    std::unique_ptr<std::thread> important_scheduler_thread_;
+    std::unique_ptr<std::thread> unimportant_scheduler_thread_;
 #else
     /** the thread for receiving messages */
     std::unique_ptr<std::thread> receiver_thread_;

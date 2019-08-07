@@ -228,73 +228,78 @@ void Van::ProcessDataMsg(Message* msg) {
 		  
 	  } */
   //std::cout << msg->DebugString() << std::endl;
-  /* static int cn = 0;
-  static int ct = 0; */
-#ifdef RECONSTRUCT //
-  if(my_node_.role == 0 && msg->meta.msg_type == 2){   //run only on server side
-      //std::cout << msg->DebugString() << std::endl;
-      msg_map[msg->meta.sender][msg->meta.first_key][msg->meta.seq] = *msg;
-      
-      if(msg->meta.seq == msg->meta.seq_end){
-          //std::cout << "seq_end-------"<< msg->DebugString() << std::endl;
-          int total_bytes = msg->meta.total_bytes;
-          char* buf = (char *)malloc(total_bytes);
-          memset(buf,0,total_bytes);
-          //std::cout << "[" << msg->meta.first_key << "] achieve rate = " << (float)msg_map[msg->meta.sender][msg->meta.first_key].size() / (msg->meta.seq_end + 1) << std::endl;
-          /* ct += msg->meta.seq_end + 1;
-          cn += msg_map[msg->meta.sender][msg->meta.first_key].size();
-          if(ct > 1000){
-              std::cout << "msg avg loss rate = " << 1 - (float) cn / ct << std::endl;
-              ct = 0;
-              cn = 0;
-          } */
-          for(auto &m : msg_map[msg->meta.sender][msg->meta.first_key]){
+  static int cn = 0;
+  static int ct = 0; 
+  if(reconstruct){
+      if(my_node_.role == 0 && msg->meta.msg_type == 2){   //run only on server side
+          //std::cout << msg->DebugString() << std::endl;
+          msg_map[msg->meta.sender][msg->meta.first_key][msg->meta.seq] = *msg;
+          
+          if(msg->meta.seq == msg->meta.seq_end){
+              //std::cout << "seq_end-------"<< msg->DebugString() << std::endl;
+              int total_bytes = msg->meta.total_bytes;
+              char* buf = (char *)malloc(total_bytes);
+              memset(buf,0,total_bytes);
               
-  
-            //std::cout << m.second.DebugString() << std::endl;
-            
-            memcpy(buf+ m.second.meta.val_bytes,(char*) m.second.data[1].data(),m.second.meta.vals_len);
+              //std::cout << "[" << msg->meta.first_key << "] achieve rate = " << (float)msg_map[msg->meta.sender][msg->meta.first_key].size() / (msg->meta.seq_end + 1) << std::endl;
+              if(msg->meta.sender == 9){
+                  
+              
+                  ct += msg->meta.seq_end + 1;
+                  cn += msg_map[msg->meta.sender][msg->meta.first_key].size();
+                  if(ct > 1000){
+                      std::cout << "msg avg loss rate = " << 1 - (float) cn / ct << std::endl;
+                      ct = 0;
+                      cn = 0;
+                  }
+              }
+              for(auto &m : msg_map[msg->meta.sender][msg->meta.first_key]){
+                  
+      
+                //std::cout << m.second.DebugString() << std::endl;
+                
+                memcpy(buf+ m.second.meta.val_bytes,(char*) m.second.data[1].data(),m.second.meta.vals_len);
+              }
+              //std::cout << "over memcpy" << std::endl;
+              Message rmsg;
+              rmsg.meta = msg->meta;
+              /* rmsg.meta.app_id = msg->meta.app_id;
+            rmsg.meta.customer_id = msg->meta.customer_id;
+            rmsg.meta.request =  msg->meta.request;
+            rmsg.meta.push =  msg->meta.push;
+            rmsg.meta.head = msg->meta.head;
+            rmsg.meta.timestamp = msg->meta.timestamp;
+            rmsg.meta.recver = msg->meta.recver;
+            rmsg.meta.msg_type = msg->meta.msg_type;
+            rmsg.meta.push_op_num = msg->meta.push_op_num;
+            rmsg.meta.total_bytes = msg->meta.total_bytes;
+            rmsg.meta.first_key =  msg->meta.first_key;
+            rmsg.meta.seq = msg->meta.seq;
+            rmsg.meta.seq_begin = msg->meta.seq_begin;
+            rmsg.meta.seq_end = msg->meta.seq_end; */
+              rmsg.data.push_back(msg->data[0]);
+              SArray<char> data;
+              data.reset(buf, total_bytes, [rmsg](char* buf) {
+                            /* zmq_msg_close(zmsg);
+                            delete zmsg; */
+                            free(buf);
+                            });
+              rmsg.data.push_back(data);
+              //free(buf);
+              rmsg.data.push_back(msg->data[2]);
+              //std::cout << rmsg.DebugString() << std::endl;
+              obj->Accept(rmsg);
+              //std::cout << "Success to summit a rmsg!" << std::endl;
+             // msg_map[msg->meta.sender][msg->meta.first_key].clear();//
           }
-          //std::cout << "over memcpy" << std::endl;
-          Message rmsg;
-          rmsg.meta = msg->meta;
-          /* rmsg.meta.app_id = msg->meta.app_id;
-        rmsg.meta.customer_id = msg->meta.customer_id;
-        rmsg.meta.request =  msg->meta.request;
-        rmsg.meta.push =  msg->meta.push;
-        rmsg.meta.head = msg->meta.head;
-        rmsg.meta.timestamp = msg->meta.timestamp;
-        rmsg.meta.recver = msg->meta.recver;
-        rmsg.meta.msg_type = msg->meta.msg_type;
-        rmsg.meta.push_op_num = msg->meta.push_op_num;
-        rmsg.meta.total_bytes = msg->meta.total_bytes;
-        rmsg.meta.first_key =  msg->meta.first_key;
-        rmsg.meta.seq = msg->meta.seq;
-        rmsg.meta.seq_begin = msg->meta.seq_begin;
-        rmsg.meta.seq_end = msg->meta.seq_end; */
-          rmsg.data.push_back(msg->data[0]);
-          SArray<char> data;
-          data.reset(buf, total_bytes, [rmsg](char* buf) {
-                        /* zmq_msg_close(zmsg);
-                        delete zmsg; */
-                        free(buf);
-                        });
-          rmsg.data.push_back(data);
-          //free(buf);
-          rmsg.data.push_back(msg->data[2]);
-          //std::cout << rmsg.DebugString() << std::endl;
-          obj->Accept(rmsg);
-          //std::cout << "Success to summit a rmsg!" << std::endl;
-          msg_map[msg->meta.sender][msg->meta.first_key].clear();
+      }else{    //pull
+        
+          obj->Accept(*msg);
       }
-  }else{    //pull
-    
+  }else{
       obj->Accept(*msg);
   }
-#else
-  
-  obj->Accept(*msg);
-#endif
+ 
 }
 
 void Van::ProcessAddNodeCommand(Message* msg, Meta* nodes, Meta* recovery_nodes) {
@@ -390,8 +395,8 @@ void Van::Start(int customer_id) {
 #endif
 #ifdef RECONSTRUCT
        //msg_size_limit = dmlc::GetEnv("DGT_MSG_SIZE_LIMIT", 4 * 1024);
-       msg_size_limit = atoi(CHECK_NOTNULL(Environment::Get()->find("DGT_MSG_SIZE_LIMIT")));
-       std::cout << "msg_size_limit[in van.cc] = " << msg_size_limit << std::endl;
+       reconstruct = atoi(CHECK_NOTNULL(Environment::Get()->find("DGT_RECONSTRUCT")));
+       std::cout << "reconstruct[in van.cc] = " << reconstruct << std::endl;
 #endif
       // cannot determine my id now, the scheduler will assign it later
       // set it explicitly to make re-register within a same process possible
@@ -434,6 +439,10 @@ void Van::Start(int customer_id) {
               new std::thread(&Van::Receiving_UDP,this,i));
            // udp_receiver_thread_vec.push_back(udp_receiver_thread_);
         }
+        important_scheduler_thread_ = std::unique_ptr<std::thread>(
+            new std::thread(&Van::Important_scheduler, this));
+        unimportant_scheduler_thread_ = std::unique_ptr<std::thread>(
+            new std::thread(&Van::Unimportant_scheduler, this));
     }
 #else
 	
@@ -512,6 +521,10 @@ void Van::Stop() {
 	tcp_receiver_thread_->join();
     for(int i = 0; i < udp_receiver_thread_vec.size(); ++i){
         udp_receiver_thread_[i]->join();
+    }
+    if(!is_scheduler_){
+        important_scheduler_thread_->join();
+        unimportant_scheduler_thread_->join();
     }
 #else
   receiver_thread_->join();
@@ -612,6 +625,48 @@ void Van::decode(Message& msg) {
     msg.meta.vals_len = msg.data[1].size();
 }
 #endif
+int Van::Classifier( Message& msg, int channel, int tag) {
+    if(channel == 0){
+        important_queue_.Push(msg);
+    }else{
+        unimportant_queue_.Push(msg);
+    }
+}
+void Van::Important_scheduler() {
+  while (true) {
+    Message msg;
+    important_queue_.WaitAndPop(&msg);
+    Important_send(msg);
+  }
+}
+void Van::Unimportant_scheduler() {
+  while (true) {
+    Message msg;
+    unimportant_queue_.WaitAndPop(&msg);
+    Unimportant_send(msg);
+  }
+}
+int Van::Important_send(Message& msg) {
+  int send_bytes = SendMsg(msg);
+  CHECK_NE(send_bytes, -1);
+  //send_bytes_ += send_bytes;
+
+  if (Postoffice::Get()->verbose() >= 2) {
+    PS_VLOG(2) << msg.DebugString();
+  }
+  return send_bytes;
+}
+int Van::Unimportant_send(Message& msg) {
+  int send_bytes = SendMsg_UDP(msg.meta.channel-1, msg, 0);
+  CHECK_NE(send_bytes, -1);
+  //send_bytes_ += send_bytes;
+
+  if (Postoffice::Get()->verbose() >= 2) {
+    PS_VLOG(2) << msg.DebugString();
+  }
+  return send_bytes;
+}
+
 int Van::Send( Message& msg, int channel, int tag) {
 	int send_bytes = 0;
 #ifdef ENCODE
