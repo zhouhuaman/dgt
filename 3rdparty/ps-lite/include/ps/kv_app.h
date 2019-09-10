@@ -735,7 +735,7 @@ float KVWorker<Val>::mse(int key, int block_size, SArray<Val>& vals) {
         }
         mt += mse_t;
         lt += nlen;
-        
+        remain_bytes -= l;
     }
     std::cout << key << "," << mt/lt << std::endl; 
 }

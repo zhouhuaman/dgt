@@ -405,6 +405,10 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
 		//delete data;
 	}
 	assert(tot_bytes == addr_offset);
+    if(enable_send_drop){
+        free(send_buf);
+        return -1;
+    }
 	zmq_msg_t data_msg;
 	zmq_msg_init_data(&data_msg, send_buf, tot_bytes, FreeData_malloc, NULL);
 	zmq_msg_set_group (&data_msg, "GRADIENT");

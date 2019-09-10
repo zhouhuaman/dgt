@@ -290,7 +290,7 @@ void Van::ProcessDataMsg(Message* msg) {
               //std::cout << rmsg.DebugString() << std::endl;
               obj->Accept(rmsg);
               //std::cout << "Success to summit a rmsg!" << std::endl;
-             // msg_map[msg->meta.sender][msg->meta.first_key].clear();//
+              msg_map[msg->meta.sender][msg->meta.first_key].clear();
           }
       }else{    //pull
         
