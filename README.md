@@ -1,97 +1,37 @@
-<div align="center">
-  <a href="https://mxnet.incubator.apache.org/"><img src="https://raw.githubusercontent.com/dmlc/web-data/master/mxnet/image/mxnet_logo_2.png"></a><br>
-</div>
+# This is a version of MXNET with DGT functionality.
 
-Apache MXNet (incubating) for Deep Learning
-=====
-| Master         | Docs          | License  |
-| :-------------:|:-------------:|:--------:|
-| [![Build Status](http://jenkins.mxnet-ci.amazon-ml.com/job/incubator-mxnet/job/master/badge/icon)](http://jenkins.mxnet-ci.amazon-ml.com/job/incubator-mxnet/job/master/)  | [![Documentation Status](http://jenkins.mxnet-ci.amazon-ml.com/job/restricted-website-build/badge/icon)](https://mxnet.incubator.apache.org/) | [![GitHub license](http://dmlc.github.io/img/apache2.svg)](./LICENSE) |
+Differential Gradient Transmission (DGT) is a  contribution-aware differential gradient transmission mechanism for distributed machine learning. The basic idea of DGT is to provide differential transmission service for gradients according to their contribution to model convergence.
+## Setup
+The installation of current version can refer to the MXNET's installation instruction (https://mxnet.apache.org/get_started/ubuntu_setup ) from source code.
 
-![banner](https://raw.githubusercontent.com/dmlc/web-data/master/mxnet/image/banner.png)
+## Configurable Environment variable
 
-Apache MXNet (incubating) is a deep learning framework designed for both *efficiency* and *flexibility*.
-It allows you to ***mix*** [symbolic and imperative programming](https://mxnet.incubator.apache.org/architecture/index.html#deep-learning-system-design-concepts)
-to ***maximize*** efficiency and productivity.
-At its core, MXNet contains a dynamic dependency scheduler that automatically parallelizes both symbolic and imperative operations on the fly.
-A graph optimization layer on top of that makes symbolic execution fast and memory efficient.
-MXNet is portable and lightweight, scaling effectively to multiple GPUs and multiple machines.
 
-MXNet is also more than a deep learning project. It is also a collection of
-[blue prints and guidelines](https://mxnet.incubator.apache.org/architecture/index.html#deep-learning-system-design-concepts) for building
-deep learning systems, and interesting insights of DL systems for hackers.
+| Name      |     Description |
+| :-------- | --------|
+| ENABLE_DGT| The variable controls whether the DGT function is enabled. ENABLE_DGT=0 indicates that the DGT function is not enabled and the default gradient transmission of MXNET is used. ENABLED_DGT=1 indicates that the DGT function is enabled.  |
+| DMLC_UDP_CHANNEL_NUM | The variable sets the number of unreliable channels and supports value from 1 to 7. |
+|DMLC_K| The variable sets the initial classification threshold p<sub>0</sub>, and supports value ranging from 0.0 to 1.0.  |
+|ADAPTIVE_K_FLAG| The variable controls whether the function of convergence-aware update method for classification threshold is enabled. ADAPTIVE_K_FLAG = 1 enables the function.|
+|SUDO_PASSWD|The variable is the SUDO password provided by the user. This environment variable is read during the initialization of the transmission channels and is used to support the priority setteing of channels| 
+|DGT_ENABLE_BLOCK|The variable controls whether the function of gradient partition is enabled. DGT_ENABLE_BLOCK=1 enables the function. This variable is used for testing|
+|DGT_BLOCK_SIZE|The variable sets the block size of gradient partition predefined by user|
+|DGT_RECONSTRUCT|The variable is used for testing, DGT_RECONSTRUCT=1 indicates that Diff-Reception method is adopted at receving end and DGT_RECONSTRUCT=0 indicates that "Heuristic Dropping" method is adopted.|
+|DGT_CONTRI_ALPHA|The variable sets the contribution momentum factor and support value from 0.0 to 1.0.|
+|DGT_ENABLE_SEND_DROP|The variable is used for testing. DGT_ENABLE_SEND_DROP=1 indicates that Sender Dropping (SD) solution is adopted for gradient transmission|
+|DGT_SET_RANDOM| The variable is used for testing. DGT_SET_RANDOM = 1 indicates that gradients are sorted randomly before classification which is used for verifying the effect of contribution-aware differential transmission.|
+|DGT_INFO|The variable controls whether to display the debugging information of the DGT component for testing. |
+## Deployment Example
+Here we give a deployment example for current version. Except the default start script of MXNET, we add some variable settings for DGT function.  If the cluster has 1 parameter server and 2 worker, we deploy the distributed learning with following start script. 
 
-Ask Questions
--------------
-* Please use [discuss.mxnet.io](https://discuss.mxnet.io/) for asking questions.
-* Please use [mxnet/issues](https://github.com/apache/incubator-mxnet/issues) for reporting bugs.
-* [Frequent Asked Questions](https://mxnet.incubator.apache.org/faq/faq.html)
+    #Scheduler
+    export LD_LIBRARY_PATH=:/home/homan/incubator-mxnet/deps/lib:/usr/local/cuda-9.0/lib64; export DMLC_NUM_WORKER=2; export DMLC_NUM_SERVER=1; export DMLC_PS_ROOT_URI=10.2.1.11; export DMLC_PS_ROOT_PORT=9120; export DMLC_ROLE=scheduler; export DMLC_NODE_HOST=10.2.1.11; python xxxx.py
+    #Server
+    export LD_LIBRARY_PATH=:/home/homan/incubator-mxnet/deps/lib:/usr/local/cuda-9.0/lib64; export DMLC_NUM_WORKER=2; export DMLC_NUM_SERVER=1; export DMLC_PS_ROOT_URI=10.2.1.11; export DMLC_PS_ROOT_PORT=9120; export DMLC_UDP_CHANNEL_NUM=7; export DMLC_K=0.8; export ADAPTIVE_K_FLAG=1; export ENABLE_DGT=1;export DMLC_ROLE=server; export DMLC_NODE_HOST=10.2.1.11; export PS_VERBOSE=1; export SUDO_PASSWD=111111 ; export DGT_INFO=1; export DGT_RECONSTRUCT=1; python xxxx.py
+    #Worker 1
+    export LD_LIBRARY_PATH=:/home/homan/incubator-mxnet/deps/lib:/usr/local/cuda-9.0/lib64; export DMLC_NUM_WORKER=2; export DMLC_NUM_SERVER=1; export DMLC_PS_ROOT_URI=10.2.1.11; export DMLC_PS_ROOT_PORT=9120; export DMLC_UDP_CHANNEL_NUM=7; export DMLC_K=0.8; export ADAPTIVE_K_FLAG=1; export ENABLE_DGT=1;export DMLC_ROLE=worker; export DMLC_NODE_HOST=10.2.1.10; export PS_VERBOSE=1; export SUDO_PASSWD=111111 ; export DGT_ENABLE_SEND_DROP=0;DGT_CONTRI_ALPHA=0.3; export DGT_SET_RANDOM=0; export DGT_INFO=1;export DGT_ENABLE_BLOCK=1;export DGT_BLOCK_SIZE=4096; export DGT_RECONSTRUCT=1; python xxxx.py
+    #Worker 2
+     export LD_LIBRARY_PATH=:/home/homan/incubator-mxnet/deps/lib:/usr/local/cuda-9.0/lib64; export DMLC_NUM_WORKER=2; export DMLC_NUM_SERVER=1; export DMLC_PS_ROOT_URI=10.2.1.11; export DMLC_PS_ROOT_PORT=9120; export DMLC_UDP_CHANNEL_NUM=7; export DMLC_K=0.8; export ADAPTIVE_K_FLAG=1; export ENABLE_DGT=1;export DMLC_ROLE=worker; export DMLC_NODE_HOST=10.2.1.12; export PS_VERBOSE=1; export SUDO_PASSWD=111111 ; export DGT_ENABLE_SEND_DROP=0;DGT_CONTRI_ALPHA=0.3; export DGT_SET_RANDOM=0; export DGT_INFO=1;export DGT_ENABLE_BLOCK=1;export DGT_BLOCK_SIZE=4096; export DGT_RECONSTRUCT=1; python xxxx.py
 
-How to Contribute
------------------
-* [Contribute to MXNet](https://mxnet.incubator.apache.org/community/contribute.html)
 
-What's New
-----------
-* [Version 1.3.1 Release](https://github.com/apache/incubator-mxnet/releases/tag/1.3.1) - MXNet 1.3.1 Patch Release.
-* [Version 1.3.0 Release](https://github.com/apache/incubator-mxnet/releases/tag/1.3.0) - MXNet 1.3.0 Release.
-* [Version 1.2.0 Release](https://github.com/apache/incubator-mxnet/releases/tag/1.2.0) - MXNet 1.2.0 Release.
-* [Version 1.1.0 Release](https://github.com/apache/incubator-mxnet/releases/tag/1.1.0) - MXNet 1.1.0 Release.
-* [Version 1.0.0 Release](https://github.com/apache/incubator-mxnet/releases/tag/1.0.0) - MXNet 1.0.0 Release.
-* [Version 0.12.1 Release](https://github.com/apache/incubator-mxnet/releases/tag/0.12.1) - MXNet 0.12.1 Patch Release.
-* [Version 0.12.0 Release](https://github.com/apache/incubator-mxnet/releases/tag/0.12.0) - MXNet 0.12.0 Release.
-* [Version 0.11.0 Release](https://github.com/apache/incubator-mxnet/releases/tag/0.11.0) - MXNet 0.11.0 Release.
-* [Apache Incubator](http://incubator.apache.org/projects/mxnet.html) - We are now an Apache Incubator project.
-* [Version 0.10.0 Release](https://github.com/dmlc/mxnet/releases/tag/v0.10.0) - MXNet 0.10.0 Release.
-* [Version 0.9.3 Release](./docs/architecture/release_note_0_9.md) - First 0.9 official release.
-* [Version 0.9.1 Release (NNVM refactor)](./docs/architecture/release_note_0_9.md) - NNVM branch is merged into master now. An official release will be made soon.
-* [Version 0.8.0 Release](https://github.com/dmlc/mxnet/releases/tag/v0.8.0)
-* [Updated Image Classification with new Pre-trained Models](./example/image-classification)
-* [Notebooks How to Use MXNet](https://github.com/zackchase/mxnet-the-straight-dope)
-* [MKLDNN for Faster CPU Performance](./MKLDNN_README.md)
-* [MXNet Memory Monger, Training Deeper Nets with Sublinear Memory Cost](https://github.com/dmlc/mxnet-memonger)
-* [Tutorial for NVidia GTC 2016](https://github.com/dmlc/mxnet-gtc-tutorial)
-* [Embedding Torch layers and functions in MXNet](https://mxnet.incubator.apache.org/faq/torch.html)
-* [MXNet.js: Javascript Package for Deep Learning in Browser (without server)
-](https://github.com/dmlc/mxnet.js/)
-* [Design Note: Design Efficient Deep Learning Data Loading Module](https://mxnet.incubator.apache.org/architecture/note_data_loading.html)
-* [MXNet on Mobile Device](https://mxnet.incubator.apache.org/faq/smart_device.html)
-* [Distributed Training](https://mxnet.incubator.apache.org/faq/multi_devices.html)
-* [Guide to Creating New Operators (Layers)](https://mxnet.incubator.apache.org/faq/new_op.html)
-* [Go binding for inference](https://github.com/songtianyi/go-mxnet-predictor)
-* [Amalgamation and Go Binding for Predictors](https://github.com/jdeng/gomxnet/) - Outdated
-* [Large Scale Image Classification](https://github.com/apache/incubator-mxnet/tree/master/example/image-classification)
 
-Contents
---------
-* [Documentation](https://mxnet.incubator.apache.org/) and  [Tutorials](https://mxnet.incubator.apache.org/tutorials/)
-* [Design Notes](https://mxnet.incubator.apache.org/architecture/index.html)
-* [Code Examples](https://github.com/apache/incubator-mxnet/tree/master/example)
-* [Installation](https://mxnet.incubator.apache.org/install/index.html)
-* [Pretrained Models](http://mxnet.incubator.apache.org/api/python/gluon/model_zoo.html)
-
-Features
---------
-* Design notes providing useful insights that can re-used by other DL projects
-* Flexible configuration for arbitrary computation graph
-* Mix and match imperative and symbolic programming to maximize flexibility and efficiency
-* Lightweight, memory efficient and portable to smart devices
-* Scales up to multi GPUs and distributed setting with auto parallelism
-* Support for Python, Scala, C++, Java, Clojure, R and Julia
-* Cloud-friendly and directly compatible with S3, HDFS, and Azure
-
-License
--------
-Licensed under an [Apache-2.0](https://github.com/apache/incubator-mxnet/blob/master/LICENSE) license.
-
-Reference Paper
----------------
-
-Tianqi Chen, Mu Li, Yutian Li, Min Lin, Naiyan Wang, Minjie Wang, Tianjun Xiao,
-Bing Xu, Chiyuan Zhang, and Zheng Zhang.
-[MXNet: A Flexible and Efficient Machine Learning Library for Heterogeneous Distributed Systems](https://github.com/dmlc/web-data/raw/master/mxnet/paper/mxnet-learningsys.pdf).
-In Neural Information Processing Systems, Workshop on Machine Learning Systems, 2015
-
-History
--------
-MXNet emerged from a collaboration by the authors of [cxxnet](https://github.com/dmlc/cxxnet), [minerva](https://github.com/dmlc/minerva), and [purine2](https://github.com/purine/purine2). The project reflects what we have learned from the past projects. MXNet combines aspects of each of these projects to achieve flexibility, speed, and memory efficiency.
