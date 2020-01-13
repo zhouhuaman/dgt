@@ -87,15 +87,15 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
         udp_receiver_ = zmq_socket(context_, ZMQ_DISH);
         CHECK(udp_receiver_ != NULL)
     << "create udp_receiver[" << i<<" ]socket failed: " << zmq_strerror(errno);
-        /* int udp_recv_buf_size = 4096*1024;  //4M 
+        int udp_recv_buf_size = 64*1024*1024;  //4M 
         int rc = zmq_setsockopt(udp_receiver_, ZMQ_RCVBUF, &udp_recv_buf_size, sizeof(udp_recv_buf_size));
         assert(rc == 0);
         int check_rcv_buff = 0;
         size_t check_len = sizeof(check_rcv_buff);
         rc = zmq_getsockopt(udp_receiver_, ZMQ_RCVBUF, &check_rcv_buff, &check_len);
         
-        std::cout << "recv["<< i <<"] buf size = " << check_rcv_buff << std::endl; */
-        int rc;
+        std::cout << "recv["<< i <<"] buf size = " << check_rcv_buff << std::endl;
+        
         int local = GetEnv("DMLC_LOCAL", 0);
         std::string hostname = node.hostname.empty() ? "*" : node.hostname;
         int use_kubernetes = GetEnv("DMLC_USE_KUBERNETES", 0);
@@ -170,14 +170,14 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
           }
         }
        
-        /* int udp_send_buf_size = 4096*1024;  //4M 
+        int udp_send_buf_size = 16*1024*1024;  //4M 
         int rc = zmq_setsockopt(udp_sender, ZMQ_SNDBUF, &udp_send_buf_size, sizeof(udp_send_buf_size));
         assert(rc == 0);
-        int check_snd_buff = 0;
+        /*int check_snd_buff = 0;
         size_t check_len = sizeof(check_snd_buff);
         rc = zmq_getsockopt(udp_sender, ZMQ_SNDBUF, &check_snd_buff, &check_len);
         std::cout << "send buf size = " << check_snd_buff << std::endl; */
-        int rc;
+        //int rc;
         // connect
         std::string addr = "udp://" + node.hostname + ":" + std::to_string(node.udp_port[i]);
         
@@ -407,13 +407,13 @@ std::vector<int> Bind_UDP(const Node& node, int max_retry) override {
 	assert(tot_bytes == addr_offset);
     if(enable_send_drop){
         free(send_buf);
-        return -1;
-    }
+        return tot_bytes;
+    }//
 	zmq_msg_t data_msg;
 	zmq_msg_init_data(&data_msg, send_buf, tot_bytes, FreeData_malloc, NULL);
 	zmq_msg_set_group (&data_msg, "GRADIENT");
         
-	while (!enable_send_drop) {
+	while (true) {//
         if (zmq_msg_send(&data_msg, socket, tag) == tot_bytes) break;
         if (errno == EINTR) continue;
         LOG(WARNING) << "udp:failed to send message to node [" << id
@@ -512,7 +512,7 @@ int SendMsg(Message& msg) override {
 		   delete zmsg;
            continue;
        }
-    } */
+    } *///
 	  //*************************************************************
 	 addr_offset += meta_size;
 	

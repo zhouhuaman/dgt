@@ -8,6 +8,7 @@
 make -j $(nproc)
 cd ./lib
 scp *.so* homan@10.1.1.29:/home/homan/mxnet_test_src/resnet_mnist/mxnet/
+cp *.so* /home/homan/mxnet_test_src/resnet_mnist/mxnet/
 scp *.so* homan@10.1.1.33:/home/homan/mxnet_test_src/resnet_mnist/mxnet/
 #scp *.so*  dcn@10.2.1.15:/home/dcn/mxnet_test_src/resnet_mnist/mxnet/
 

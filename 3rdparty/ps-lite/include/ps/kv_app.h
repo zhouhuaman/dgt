@@ -121,6 +121,7 @@ class KVWorker : public SimpleApp {
     block_size = dmlc::GetEnv("DGT_BLOCK_SIZE", 0);
     test_block_size = block_size;
     enable_dgt = dmlc::GetEnv("ENABLE_DGT", 0);
+    clear_zero = dmlc::GetEnv("CLEAR_ZERO", 0); //
     std::cout << "set_random = " << set_random << "dgt_info = "<<dgt_info<< "enable_block = " << enable_block<<"block_size = " << block_size << "enable_dgt = "<< enable_dgt << std::endl;
 //init_dgt();
   }
@@ -330,6 +331,7 @@ class KVWorker : public SimpleApp {
 #endif
   float dmlc_k = 1.0;
   float dmlc_k_init = 1.0;
+  float dmlc_k_min = 0.0;
   int   adaptive_k_flag = 0;
   int udp_channel_num = 0;
   int enable_send_drop = 0;
@@ -338,11 +340,14 @@ class KVWorker : public SimpleApp {
   float Evaluate_msg_contri(int key, Message& msg);
   float mse(int key, int block_size, SArray<Val>& vals);
   int Get_channel(int index, int max_index, int C, float k);
+  int Aproximate_channel_estimate(Message& msg,int C);
+  void Update_contri_max(int key, int seq, int seq_end,float contri);
   int64_t push_op_num = 0;
   int enable_block = 0;
   int block_size = 0;
   int test_block_size = 0;
   int enable_dgt = 0;
+  int clear_zero = 0;
   std::unordered_map<int, float> pre_max_N;
   float max_N = 0.0;
   float contri_alpha = 0.3;
@@ -350,7 +355,8 @@ class KVWorker : public SimpleApp {
   int dgt_info = 0;
   float p_N = 0.0;
   float max_contri = 0.0;
-  std::unordered_map<int, float> pre_max_contri;
+  std::unordered_map<int, float> contri_max;
+  std::unordered_map<int, float> pre_contri_max;
   FILE *fp;
   
   std::unordered_map<int, float> p_loss;
@@ -740,6 +746,18 @@ float KVWorker<Val>::mse(int key, int block_size, SArray<Val>& vals) {
     std::cout << key << "," << mt/lt << std::endl; 
 }
 template <typename Val>
+void KVWorker<Val>::Update_contri_max(int key, int seq, int seq_end,float contri) {
+    if(contri_max.find(key)==contri_max.end() || seq == 0) contri_max[key] = 0.0;
+    if(pre_contri_max.find(key)==pre_contri_max.end()) pre_contri_max[key] = 0.0;
+    if(contri > contri_max[key]) contri_max[key] = contri;
+    //std::cout << "contri_max[" << key << "]" << contri_max[key] << std::endl;
+    if(seq == seq_end)  {
+        
+        pre_contri_max[key] = contri_max[key];
+    }
+    
+}
+template <typename Val>
 float KVWorker<Val>::Evaluate_msg_contri(int key, Message& msg) {
     /*calculate p_N of a msg*/
     float *pd = (float*)msg.data[1].data();
@@ -758,7 +776,41 @@ float KVWorker<Val>::Evaluate_msg_contri(int key, Message& msg) {
     contri[key][msg.meta.seq] = contri_alpha * contri[key][msg.meta.seq] + (1-contri_alpha)*(N/nlen);
     //if(key == 0 && msg.meta.seq == 0)
         //std::cout << "contri[" << key << "][" << msg.meta.seq << "]" << contri[key][msg.meta.seq] << "," << N << "/" << nlen << " = " << N/nlen << std::endl;
+    Update_contri_max(key,msg.meta.seq,msg.meta.seq_end,contri[key][msg.meta.seq]);//////
     return contri[key][msg.meta.seq];
+}
+template <typename Val>
+int KVWorker<Val>::Aproximate_channel_estimate(Message& msg,int C) {
+    float p;
+    if(contri_max[msg.meta.first_key] != 0){
+        //p = msg.contri/pre_contri_max[msg.meta.first_key];
+        p = msg.contri/contri_max[msg.meta.first_key];
+        //std::cout << "key = " << msg.meta.first_key << "seq = " << msg.meta.seq << ",p=" << p << std::endl;
+    }else{
+        p = 1;
+    }
+    
+    if(p >= 1) return 0;
+    if(p == 0) return 9;
+    int channel_num = C+1;
+    int channel = 0;
+    int i = 0;
+    srand((unsigned)time(NULL));
+    for(; i < C; i++){
+        float min =  i*1.0/C;
+        float max =  (i+1)*1.0/C;
+        if(p >= min && p < max){
+            float lp = (max-p)/(max-min);
+            if((rand()%100+1)/100.0 <= lp){
+                channel = i;
+            }else{
+                channel = i+1;
+            }
+        }
+        break;
+        
+    }
+    return C-channel;
 }
 template <typename Val>
 int KVWorker<Val>::Get_channel(int index, int max_index, int C, float k) {
@@ -809,7 +861,13 @@ float KVWorker<Val>::adaptive_k(){
     //std::cout << "tp = " << tp << " delta_tp=" << delta_tp << std::endl;
     //throughput_rt = tp;
     //float k = rt_loss/first_loss * (1+delta_tp);
-    float k = dmlc_k_init*(rt_loss/first_loss);
+    float k;
+    if(dmlc_k_init*(rt_loss/first_loss) > dmlc_k_min){
+        k = dmlc_k_init*(rt_loss/first_loss);
+    }else{
+        k = dmlc_k_min;
+    }
+    //float k = std::f{dmlc_k_init*(rt_loss/first_loss),0.2};
     return k;
 }
 #endif
@@ -817,6 +875,7 @@ template <typename Val>
 void KVWorker<Val>::init_dgt(){
     Open_loss_file();
     dmlc_k_init = atof(CHECK_NOTNULL(Environment::Get()->find("DMLC_K")));
+    dmlc_k_min = atof(CHECK_NOTNULL(Environment::Get()->find("DMLC_K_MIN")));
     adaptive_k_flag = atoi(CHECK_NOTNULL(Environment::Get()->find("ADAPTIVE_K_FLAG")));
     udp_channel_num = atoi(CHECK_NOTNULL(Environment::Get()->find("DMLC_UDP_CHANNEL_NUM")));
     //enable_send_drop = atoi(CHECK_NOTNULL(Environment::Get()->find("ENABLE_SEND_DROP")));
@@ -914,9 +973,7 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
             Postoffice::Get()->van()->Send(msg);
             
         }else{
-            
-            
-            
+
             int total_bytes = kvs.vals.size();
             int remain_bytes = total_bytes;
             int val_bytes = 0;
@@ -930,7 +987,8 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
             }else{
                 seq_num = total_bytes/block_size + 1;
             }
-            
+            std::vector<int> count(udp_channel_num+1,0);
+            int count_zero = 0;
             while(remain_bytes != 0){
                 Message msg;
                 msg.meta.app_id = obj_->app_id();
@@ -964,21 +1022,77 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                     msg.AddData(kvs.lens);
                     msg.meta.lens_len = msg.data.back().size();
                   }
-                }
+                }              
                 msg.contri = Evaluate_msg_contri((int)kvs.keys[0], msg);
+                if(clear_zero){
+                     if(msg.contri != 0 || msg.meta.seq == msg.meta.seq_end) msg_vector.push_back(msg); 
+                }
+                else 
+                    msg_vector.push_back(msg); 
+                remain_bytes -= l;
+                seq++;
+                msg.data.clear();
+                /* struct timespec req;
+                req.tv_sec = 0;
+                req.tv_nsec = 100;
+                nanosleep(&req,NULL); */
+            
+            }
+            if(set_random){
+                auto engine = std::default_random_engine{};
+                std::shuffle(std::begin(msg_vector), std::end(msg_vector)-1, engine);
+            }else{
+                std::sort(msg_vector.begin(),msg_vector.end()-1,[](const Message& msg1, const Message& msg2){
+                    return msg1.contri > msg2.contri;
+                });
+            }
+            for(size_t j = 0; j < msg_vector.size(); ++j){
+                msg_vector[j].meta.channel = Get_channel(j, msg_vector.size()-1, udp_channel_num, dmlc_k);
+                if(msg_vector[j].meta.seq == msg_vector[j].meta.seq_end) {
+                    msg_vector[j].meta.channel=0;
+                }
+                if(enable_dgt){
+                    Postoffice::Get()->van()->Classifier(msg_vector[j],msg_vector[j].meta.channel,0); 
+                }else{
+                    Postoffice::Get()->van()->Send(msg_vector[j],0,0); 
+                }
+                
+                /* struct timespec req;
+                req.tv_sec = 0;
+                req.tv_nsec = 1;
+                nanosleep(&req,NULL); */
+            }
+            msg_vector.clear();
+            //msg_vector.clear(); */
+           /*  std::cout << "key = " << kvs.keys[0] << "-->";
+            std::cout << "size = " << count.size() << std::endl;
+            for(int c = 0; c < count.size();c++){
+                std::cout << c << ":" << (float)count[c]/seq_num << ";";
+            }
+            std::cout << 9 << ":" << (float)count_zero/seq_num << ";";
+            std::cout << std::endl; */
+                
+               // Postoffice::Get()->van()->Send(msg,0,0); 
+                /* if(enable_dgt){
+                    Postoffice::Get()->van()->Classifier(msg,0,0); 
+                }else{
+                    //Postoffice::Get()->van()->Send(msg_vector[j]); 
+                    Postoffice::Get()->van()->Send(msg,msg.meta.channel,0); 
+                } */
                 //std::cout << msg.DebugString() << std::endl;
-                msg_vector.push_back(msg);
-                Message_RU mru;
+                //msg_vector.push_back(msg);
+                /* Message_RU mru;
                 mru.index = msg_vector.size()-1;
                 mru.contri = msg.contri;
                 rank_vector.push_back(mru);
                 seq++;
-                remain_bytes -= l;
-                msg.data.clear();
+                
+                msg.data.clear(); */
                 //std::cout << "remain_bytes = " << remain_bytes << std::endl;
             
-            }
-            assert(seq == seq_num);
+            //}
+           
+           /*  assert(seq == seq_num); */
             /* if(set_random){
                 auto engine = std::default_random_engine{};
                 std::shuffle(std::begin(rank_vector), std::end(rank_vector), engine);
@@ -996,7 +1110,7 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
             //shuffle to avoid latter msg always be dropped.
             /* auto engine = std::default_random_engine{};
             std::shuffle(std::begin(msg_vector), std::end(msg_vector)-1, engine);// */
-            if(set_random){
+            /* if(set_random){
                 auto engine = std::default_random_engine{};
                 std::shuffle(std::begin(msg_vector), std::end(msg_vector)-1, engine);
             }else{
@@ -1016,24 +1130,24 @@ void KVWorker<Val>::Send(int timestamp, bool push, int cmd, const KVPairs<Val>& 
                    /*  for(int i=0; i<udp_channel_num+1; ++i){
                         std::cout << "[" << i << "]:" << count[i] << std::endl;
                     } */
-                }
+                //}
                 
                 //std::cout <<"key = " << msg_vector[j].meta.first_key << ",seq = " <<msg_vector[j].meta.seq <<" ,congtri = "<< msg_vector[j].contri << ",ch = " <<  msg_vector[j].meta.channel << std::endl;
                
                 //Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
-                if(enable_dgt){
+                /* if(enable_dgt){
                     Postoffice::Get()->van()->Classifier(msg_vector[j],msg_vector[j].meta.channel,tag); 
                 }else{
                     //Postoffice::Get()->van()->Send(msg_vector[j]); 
                     Postoffice::Get()->van()->Send(msg_vector[j],msg_vector[j].meta.channel,tag); 
-                }
+                } */
                 //Postoffice::Get()->van()->Send(msg_vector[j]); 
                 /* struct timespec req;
                 req.tv_sec = 0;
                 req.tv_nsec = 1;
                 nanosleep(&req,NULL); */
-            }
-            msg_vector.clear();
+            //}
+            //msg_vector.clear(); */
             
         }
     }else{                               //pull

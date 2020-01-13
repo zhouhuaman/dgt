@@ -28,7 +28,9 @@ template<typename T> class ThreadsafeQueue {
     mu_.unlock();
     cond_.notify_all();
   }
-
+  bool empty(){
+      return queue_.empty();
+  }
   /**
    * \brief wait until pop an element from the beginning, threadsafe
    * \param value the poped value

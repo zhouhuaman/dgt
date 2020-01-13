@@ -67,6 +67,13 @@ class Van {
     /*channel = 0 means tcp channel 1->udp channel tag = 0 means send imediately.*/
 	int Send(Message &msg, int channel = 0, int tag = 0);
     int Classifier( Message& msg, int channel=0, int tag=0);
+    void MergeMsg(Message* msg1, Message* msg2);
+    void ZeroMsg(Message* msg1);
+    void ZeroSArray(char *sa,int size);
+    void MergeSArray(char* sa1, char* sa2, int size);
+    void ReduceSArray(char* sa,int size,int push_var);
+    bool AsynAccept(Message* msg);
+    
     void Important_scheduler();
     void Unimportant_scheduler();
     int Important_send(Message& msg);
@@ -195,9 +202,14 @@ class Van {
     unsigned long monitor_count = 0;
 #endif
 #ifdef RECONSTRUCT
+    std::unordered_map<int,std::unordered_map<int, std::unordered_map<int,Meta>>> meta_map;
+    std::unordered_map<int,std::unordered_map<int, std::unordered_map<int,SArray<char>>>> recv_map;
     std::unordered_map<int,std::unordered_map<int, std::unordered_map<int,Message>>> msg_map;
+    std::unordered_map<int,std::unordered_map<int, Message>> msg_buffer;
+    std::unordered_map<int,std::unordered_map<int, std::unordered_map<int,int>>> recv_flag;
     int msg_size_limit = 4096;
     int reconstruct = 0;
+    unsigned int ns_delay = 0;
     ThreadsafeQueue<Message> important_queue_;
     ThreadsafeQueue<Message> unimportant_queue_;
 #endif
@@ -220,10 +232,13 @@ class Van {
     std::vector<int> barrier_count_;
     
     int drop_rate_ = 0;
+    int tcp_recv = 0;
+    int udp_recv = 0;
     std::atomic<int> timestamp_{0};
     int init_stage = 0;
 #ifdef DOUBLE_CHANNEL
 	std::mutex mu_;
+    std::mutex merge_mu_;
     
 #endif
 
